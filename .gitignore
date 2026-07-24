@@ -1,2 +1,14 @@
-/target
+# Node / web build
+node_modules/
+dist/
+.vite/
+*.local
+.DS_Store
+
+# Rust prototype (archived under legacy-rust/)
+/legacy-rust/target/
+/target/
+
+# Editor
 /.idea/
+.vscode/

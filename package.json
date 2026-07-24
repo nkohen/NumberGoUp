@@ -1,0 +1,20 @@
+{
+  "name": "number-go-up",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Number Go Up — a minimalist roguelike deck-building game where you build an arithmetic syntax tree to make the number go up.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "vitest": "^2.1.5"
+  }
+}
