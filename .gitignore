@@ -12,3 +12,6 @@ dist/
 # Editor
 /.idea/
 .vscode/
+
+# Temporary verification scripts (not part of the game)
+_*.mjs
