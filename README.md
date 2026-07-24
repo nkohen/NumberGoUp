@@ -1,0 +1,84 @@
+# Number Go Up 🫧
+
+A minimalist **roguelike deck-building** game about building an arithmetic
+syntax tree to make the number go up. Draw cards, drag glowing bubbles into a
+tree, and finalize to watch the bubbles merge into your score. Clear the round,
+upgrade your deck, and see how far the number will go.
+
+> Built overnight as an end-to-end rewrite of an earlier CLI prototype. See
+> [`docs/DESIGN.md`](docs/DESIGN.md) for the decisions behind it and
+> [`QUESTIONS.md`](QUESTIONS.md) for open questions to review.
+
+![title](docs/screenshots/title.png)
+![playing](docs/screenshots/playing.png)
+
+## Quick start
+
+```bash
+npm install
+npm run dev       # open the printed localhost URL
+```
+
+Other scripts:
+
+```bash
+npm run build     # type-check + production build into dist/
+npm run preview   # serve the production build
+npm test          # run the core-logic unit tests (Vitest)
+```
+
+The production build in `dist/` is a fully static bundle — host it anywhere
+(GitHub Pages, Netlify, an S3 bucket) or just open it. It's ~12 KB gzipped with
+no runtime dependencies.
+
+## How to play
+
+1. **Draw.** Each turn you draw 5 cards from your deck.
+2. **Play one.** Drag **one** card onto a glowing bubble; the rest of your hand
+   shuffles back into the deck for next turn.
+   - **Number cards** (`1`, `2`, …) fill an empty `0` slot.
+   - **`+` / `×` cards** split a number into `(number ○ 0)`, sprouting a fresh
+     `0` to fill.
+3. **Mind the zeros.** An unfilled `0` is worth 0 — and `× 0` zeroes out the
+   whole branch, so fill your multiplications!
+4. **Evaluate.** When you're happy, hit **Evaluate**. The tree collapses
+   bottom-up into a single number: your score.
+5. **Clear & upgrade.** Beat the target to clear the round and pick one of three
+   deck upgrades (add a card, thin a weak card, or promote a number). Targets
+   keep rising — the run ends when you fall short.
+
+Controls: **drag** to place cards, **click** buttons, `M` to mute, `Enter`/`Space`
+to Play / Evaluate / restart.
+
+## Project layout
+
+```
+src/
+  core/       Pure game logic (no DOM) — fully unit-tested
+    rng.ts        Seeded deterministic RNG (mulberry32)
+    cards.ts      Card model + starter deck
+    tree.ts       The arithmetic syntax tree: placement, evaluation, legality
+    upgrades.ts   Deck-upgrade ("shop") mechanic
+    game.ts       Run/round state machine
+  audio/
+    sound.ts      Procedural Web Audio sound effects (no asset files)
+  render/
+    layout.ts     Tidy binary-tree layout
+    animation.ts  Easing + the "evaluate" merge-animation sequencer
+    renderer.ts   Canvas drawing: bubbles, edges, particles, HUD, widgets
+  ui/
+    app.ts        Game loop, input/drag-and-drop, screen flow
+  main.ts       Entry point
+tests/          Vitest unit tests for the core
+docs/           Design, game-design, and architecture notes
+legacy-rust/    The original Rust CLI prototype, kept for reference
+```
+
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how the pieces fit together.
+
+## Tech
+
+TypeScript + Vite + an HTML5 Canvas renderer, with Vitest for the core logic.
+No game engine, no runtime dependencies. The reasoning behind this stack (and
+why not Rust/WASM, which the original prototype targeted) is documented in
+[`docs/DESIGN.md`](docs/DESIGN.md#1-technology-stack).

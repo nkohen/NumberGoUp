@@ -9,7 +9,7 @@
  *   shop       → pick one of three deck upgrades (or skip)
  *   gameover   → run summary + restart
  */
-import { Game, DEFAULT_CONFIG } from "../core/game";
+import { Game, GameConfig, DEFAULT_CONFIG } from "../core/game";
 import { Card, cardLabel } from "../core/cards";
 import { NodeId, legalTargets, hasLegalTarget } from "../core/tree";
 import { sound } from "../audio/sound";
@@ -63,9 +63,13 @@ export class App {
   private showHelp = false;
   private hintShown = true;
 
-  constructor(private canvas: HTMLCanvasElement) {
+  constructor(
+    private canvas: HTMLCanvasElement,
+    opts: { config?: Partial<GameConfig>; seed?: number } = {},
+  ) {
     this.renderer = new Renderer(canvas);
-    this.game = new Game(DEFAULT_CONFIG);
+    const config = { ...DEFAULT_CONFIG, ...(opts.config ?? {}) };
+    this.game = opts.seed !== undefined ? new Game(config, opts.seed) : new Game(config);
 
     // Restore mute preference.
     try {
@@ -277,7 +281,7 @@ export class App {
   }
 
   private restart(): void {
-    this.game = new Game(DEFAULT_CONFIG);
+    this.game = new Game(this.game.cfg);
     this.game.startRun();
     this.screen = "playing";
     this.hintShown = true;

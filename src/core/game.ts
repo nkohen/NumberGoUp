@@ -45,8 +45,11 @@ export interface GameConfig {
 
 export const DEFAULT_CONFIG: GameConfig = {
   handSize: 5,
-  baseTarget: 6,
-  targetGrowth: 1.7,
+  // Round 1 (target 4) is gently winnable additively on the starter deck (e.g.
+  // 2+2); the additive ceiling is 6 (1+1+2+2), so within a couple of rounds the
+  // rising target forces you to discover multiplication. Tunable — see docs.
+  baseTarget: 4,
+  targetGrowth: 1.6,
   upgradeChoices: 3,
 };
 
