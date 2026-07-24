@@ -19,7 +19,7 @@
  * randomness flows through a seeded `Rng`, so behavior is fully reproducible.
  */
 import { Card } from "./cards";
-import { starterDeck } from "./cards";
+import { starterDeck, functionsStarterDeck } from "./cards";
 import { Rng, randomSeed } from "./rng";
 import {
   Tree,
@@ -34,7 +34,16 @@ import { Upgrade, generateOffers, applyUpgrade } from "./upgrades";
 
 export type Phase = "title" | "playing" | "shop" | "gameover";
 
+/**
+ * Game variants:
+ *  - `classic`   — numbers and +/× only (the original spec).
+ *  - `functions` — additionally the variable `x` and the evaluate operator `ƒ`,
+ *    letting you build a polynomial and evaluate it at a point.
+ */
+export type GameMode = "classic" | "functions";
+
 export interface GameConfig {
+  mode: GameMode;
   handSize: number;
   /** Round-1 target score. */
   baseTarget: number;
@@ -44,6 +53,7 @@ export interface GameConfig {
 }
 
 export const DEFAULT_CONFIG: GameConfig = {
+  mode: "classic",
   handSize: 5,
   // Round 1 (target 4) is gently winnable additively on the starter deck (e.g.
   // 2+2); the additive ceiling is 6 (1+1+2+2), so within a couple of rounds the
@@ -52,6 +62,11 @@ export const DEFAULT_CONFIG: GameConfig = {
   targetGrowth: 1.6,
   upgradeChoices: 3,
 };
+
+/** Config for a given mode (currently the modes share the target curve). */
+export function configForMode(mode: GameMode): GameConfig {
+  return { ...DEFAULT_CONFIG, mode };
+}
 
 /** The target score for a given (1-indexed) round. */
 export function targetForRound(round: number, cfg: GameConfig): number {
@@ -103,7 +118,8 @@ export class Game {
 
   /** Begin a fresh run from the title screen. */
   startRun(): void {
-    this.deck = starterDeck();
+    this.deck =
+      this.cfg.mode === "functions" ? functionsStarterDeck() : starterDeck();
     this.round = 1;
     this.bestScore = 0;
     this.roundsCleared = 0;
@@ -207,6 +223,7 @@ export class Game {
         this.rng,
         this.round,
         this.cfg.upgradeChoices,
+        this.cfg.mode,
       );
       this.phase = "shop";
     } else {

@@ -1,22 +1,32 @@
 /**
  * The arithmetic syntax tree the player builds during a round.
  *
- * Grammar & rules (from the game spec):
+ * Grammar & rules:
  *   - The tree starts as a single "slot" that displays 0.
  *   - A NUMBER card may be played onto any SLOT, turning it into a value.
- *   - An OPERATION card may be played onto any VALUE (a number leaf), replacing
- *     that value with `op(value, slot)` — i.e. one child keeps the original
- *     number and the other child is a fresh empty slot (0).
+ *   - The VARIABLE card `x` (Functions mode) may be played onto any SLOT,
+ *     turning it into an `x` leaf.
+ *   - An OPERATION card may be played onto any LEAF (a value or an `x`),
+ *     replacing that leaf with `op(leaf, slot)` — one child keeps the original
+ *     leaf and the other is a fresh empty slot (0).
  *
- * Evaluation:
+ * Operators:
+ *   - `+`, `*` are ordinary arithmetic.
+ *   - `@` is function application: `apply(F, a)` evaluates the left subtree `F`
+ *     (a polynomial that may contain `x` leaves) at the value of the right
+ *     subtree `a`. Concretely it rebinds `x` to `eval(a)` while evaluating `F`.
+ *
+ * Evaluation (with an ambient value `xEnv` for the variable, default 0):
  *   - slot        -> 0
  *   - value(n)    -> n
+ *   - x           -> xEnv
  *   - op(+, a, b) -> eval(a) + eval(b)
  *   - op(*, a, b) -> eval(a) * eval(b)
+ *   - op(@, F, a) -> evaluate F with xEnv := eval(a)
  *
- * Every node has a stable numeric `id`. Ids are preserved across immutable
- * updates wherever a bubble should visually persist, which lets the renderer
- * animate morphs and sprouts smoothly.
+ * Every node has a stable numeric `id`, preserved across immutable updates
+ * wherever a bubble should visually persist, so the renderer can animate morphs
+ * and sprouts smoothly.
  */
 import type { Card, Op } from "./cards";
 
@@ -25,6 +35,7 @@ export type NodeId = number;
 export type TreeNode =
   | { readonly id: NodeId; readonly type: "slot" }
   | { readonly id: NodeId; readonly type: "value"; readonly value: number }
+  | { readonly id: NodeId; readonly type: "var" }
   | {
       readonly id: NodeId;
       readonly type: "op";
@@ -45,16 +56,25 @@ export function newTree(): Tree {
 
 // --- Evaluation ---------------------------------------------------------------
 
-export function evaluate(node: TreeNode): number {
+/** Evaluate a node. `xEnv` is the current binding of the variable `x`. */
+export function evaluate(node: TreeNode, xEnv = 0): number {
   switch (node.type) {
     case "slot":
       return 0;
     case "value":
       return node.value;
+    case "var":
+      return xEnv;
     case "op":
-      return node.op === "+"
-        ? evaluate(node.left) + evaluate(node.right)
-        : evaluate(node.left) * evaluate(node.right);
+      switch (node.op) {
+        case "+":
+          return evaluate(node.left, xEnv) + evaluate(node.right, xEnv);
+        case "*":
+          return evaluate(node.left, xEnv) * evaluate(node.right, xEnv);
+        case "@":
+          // Apply: evaluate the function (left) at the point given by the right.
+          return evaluate(node.left, evaluate(node.right, xEnv));
+      }
   }
 }
 
@@ -91,12 +111,22 @@ export function slotCount(node: TreeNode): number {
   return 0;
 }
 
+/** Is this node a "leaf" that an operation can be played onto (value or x)? */
+export function isOpTarget(node: TreeNode): boolean {
+  return node.type === "value" || node.type === "var";
+}
+
 // --- Legality -----------------------------------------------------------------
 
-/** Can `card` legally be played onto the node with this id? */
+/** Can `card` legally be played onto this node? */
 export function canPlaceOn(node: TreeNode, card: Card): boolean {
-  if (card.kind === "number") return node.type === "slot";
-  return node.type === "value"; // op cards go on number leaves
+  switch (card.kind) {
+    case "number":
+    case "var":
+      return node.type === "slot";
+    case "op":
+      return isOpTarget(node);
+  }
 }
 
 /** Ids of every node onto which `card` may currently be played. */
@@ -123,7 +153,14 @@ export interface PlaceResult {
   readonly placedNodeId: NodeId;
   /** Ids of nodes that did not exist before this placement (to "sprout"). */
   readonly newNodeIds: NodeId[];
-  readonly kind: "number-on-slot" | "op-on-value";
+  readonly kind: "leaf-on-slot" | "op-on-leaf";
+}
+
+/** Copy a leaf node, preserving its identity (used as the child under a new op). */
+function copyLeaf(node: TreeNode): TreeNode {
+  if (node.type === "value") return { id: node.id, type: "value", value: node.value };
+  if (node.type === "var") return { id: node.id, type: "var" };
+  return { id: node.id, type: "slot" };
 }
 
 /**
@@ -142,14 +179,18 @@ export function place(tree: Tree, targetId: NodeId, card: Card): PlaceResult | n
   const replaced = replaceNode(tree.root, targetId, (node): TreeNode => {
     if (card.kind === "number") {
       // Morph the slot in place — keep the id so the bubble stays put.
-      kind = "number-on-slot";
+      kind = "leaf-on-slot";
       placedNodeId = node.id;
       return { id: node.id, type: "value", value: card.value };
     }
-    // Op on a value: keep the original value bubble (its id) as the left child,
-    // spawn a fresh op node (takes the target's screen position) and a new slot.
-    kind = "op-on-value";
-    const value = node as Extract<TreeNode, { type: "value" }>;
+    if (card.kind === "var") {
+      kind = "leaf-on-slot";
+      placedNodeId = node.id;
+      return { id: node.id, type: "var" };
+    }
+    // Op on a leaf: keep the original leaf (its id) as the left child, spawn a
+    // fresh op node (takes the target's screen position) and a new slot.
+    kind = "op-on-leaf";
     const opId = nextId++;
     const slotId = nextId++;
     newNodeIds.push(opId, slotId);
@@ -158,7 +199,7 @@ export function place(tree: Tree, targetId: NodeId, card: Card): PlaceResult | n
       id: opId,
       type: "op",
       op: card.op,
-      left: { id: value.id, type: "value", value: value.value },
+      left: copyLeaf(node),
       right: { id: slotId, type: "slot" },
     };
   });
@@ -195,7 +236,13 @@ export function treeToString(node: TreeNode): string {
       return "0";
     case "value":
       return String(node.value);
+    case "var":
+      return "x";
     case "op":
+      if (node.op === "@") {
+        // Function application: F(a)
+        return `${treeToString(node.left)}(${treeToString(node.right)})`;
+      }
       return `(${treeToString(node.left)} ${node.op} ${treeToString(node.right)})`;
   }
 }

@@ -88,6 +88,43 @@ Design intent: give the classic deck-builder choice between **going wide**
 cards that show up more reliably). Multiplication is deliberately scarce-then-
 buyable because it's how scores actually explode.
 
+## Modes
+
+Two modes are selectable from the title screen.
+
+### Classic
+Numbers and `+`/`×` — the original spec (everything above).
+
+### Functions
+Adds two cards on top of Classic:
+
+- **`x`** — a variable leaf. It fills a `0`-slot just like a number, but its
+  value is whatever `x` is currently *bound* to (see the rule below).
+- **`ƒ`** — the evaluate/apply operator. Like other operators it attaches to a
+  number or `x` leaf, turning a leaf `L` into `ƒ(L, 0)`. Semantically
+  `ƒ(F, a)` evaluates the **function** `F` (its left subtree, which may contain
+  `x` leaves) at the **point** `a` (its right subtree): it binds `x := eval(a)`
+  while evaluating `F`.
+
+**Variable binding rule:** an `x` leaf evaluates to the nearest enclosing `ƒ`'s
+argument. **Outside any `ƒ`, `x = 0`.** Nested `ƒ`s rebind `x` to the inner
+argument (dynamic scoping) — e.g. `ƒ(ƒ(x, x), 5) = 5`.
+
+Examples: `ƒ(x×x, 3) = 9`, `ƒ((x+1)×(x+1), 4) = 25`.
+
+**Functions starter deck (9 cards):** `1 2 3 x x + × × ƒ`. The shop can also
+offer `x` and `ƒ`. Round 1 is still winnable additively (e.g. `1+3`); `ƒ` unlocks
+polynomial builds that scale much faster.
+
+**Design note:** because operators only attach to leaves (no re-parenting), `ƒ`
+is most powerful when placed early, so the whole tree is one evaluation; placed
+deep it becomes a sub-evaluation. This is consistent with Classic's
+commit-as-you-go character. Colours: `x` is magenta, `ƒ` is violet.
+
+*(Functions mode is under-tuned like the rest — the polynomial-at-a-point
+mechanic can produce large scores, so its target curve may want to differ from
+Classic's eventually; right now they share one curve.)*
+
 ## Feel / juice
 
 - Bubbles **pop in** with an overshoot ease and ease toward their layout slots.

@@ -9,9 +9,9 @@
  *   shop       → pick one of three deck upgrades (or skip)
  *   gameover   → run summary + restart
  */
-import { Game, GameConfig, DEFAULT_CONFIG } from "../core/game";
+import { Game, GameConfig, GameMode, configForMode } from "../core/game";
 import { Card, cardLabel } from "../core/cards";
-import { NodeId, legalTargets, hasLegalTarget } from "../core/tree";
+import { NodeId, legalTargets, hasLegalTarget, listNodes, treeToString } from "../core/tree";
 import { sound } from "../audio/sound";
 import {
   Renderer,
@@ -40,7 +40,8 @@ interface UiBoxes {
   evaluateBtn?: Rect;
   redrawBtn?: Rect;
   muteRect?: Rect;
-  playBtn?: Rect;
+  classicBtn?: Rect;
+  functionsBtn?: Rect;
   helpBtn?: Rect;
   restartBtn?: Rect;
   shopOptions: Rect[];
@@ -63,13 +64,19 @@ export class App {
   private showHelp = false;
   private hintShown = true;
 
+  /** DEV/URL overrides applied on top of the chosen mode's config. */
+  private overrideConfig: Partial<GameConfig>;
+  private seedOverride?: number;
+
   constructor(
     private canvas: HTMLCanvasElement,
     opts: { config?: Partial<GameConfig>; seed?: number } = {},
   ) {
     this.renderer = new Renderer(canvas);
-    const config = { ...DEFAULT_CONFIG, ...(opts.config ?? {}) };
-    this.game = opts.seed !== undefined ? new Game(config, opts.seed) : new Game(config);
+    this.overrideConfig = opts.config ?? {};
+    this.seedOverride = opts.seed;
+    // A placeholder game until the player picks a mode on the title screen.
+    this.game = this.makeGame("classic");
 
     // Restore mute preference.
     try {
@@ -104,7 +111,7 @@ export class App {
 
   private onKey = (e: KeyboardEvent): void => {
     if (e.key === "Enter" || e.key === " ") {
-      if (this.screen === "title" && this.ui.playBtn) this.startRun();
+      if (this.screen === "title") this.startRun("classic");
       else if (this.screen === "playing") this.beginEvaluate();
       else if (this.screen === "gameover") this.restart();
     }
@@ -123,9 +130,12 @@ export class App {
 
     switch (this.screen) {
       case "title":
-        if (this.ui.playBtn && pointInRect(x, y, this.ui.playBtn)) {
+        if (this.ui.classicBtn && pointInRect(x, y, this.ui.classicBtn)) {
           sound.click();
-          this.startRun();
+          this.startRun("classic");
+        } else if (this.ui.functionsBtn && pointInRect(x, y, this.ui.functionsBtn)) {
+          sound.click();
+          this.startRun("functions");
         } else if (this.ui.helpBtn && pointInRect(x, y, this.ui.helpBtn)) {
           this.showHelp = !this.showHelp;
           sound.click();
@@ -232,7 +242,7 @@ export class App {
       const circle = this.ui.nodeCircles.find((c) => c.id === targetId);
       const res = this.game.play(drag.handIndex, targetId);
       if (res && circle) {
-        if (res.kind === "op-on-value") {
+        if (res.kind === "op-on-leaf") {
           sound.sprout();
         } else {
           sound.place();
@@ -274,14 +284,22 @@ export class App {
 
   // --- screen transitions -----------------------------------------------------
 
-  private startRun(): void {
+  private makeGame(mode: GameMode): Game {
+    const config = { ...configForMode(mode), ...this.overrideConfig };
+    return this.seedOverride !== undefined
+      ? new Game(config, this.seedOverride)
+      : new Game(config);
+  }
+
+  private startRun(mode: GameMode): void {
+    this.game = this.makeGame(mode);
     this.game.startRun();
     this.screen = "playing";
     this.hintShown = true;
   }
 
   private restart(): void {
-    this.game = new Game(this.game.cfg);
+    this.game = this.makeGame(this.game.cfg.mode);
     this.game.startRun();
     this.screen = "playing";
     this.hintShown = true;
@@ -353,12 +371,24 @@ export class App {
       color: "rgba(234,240,255,0.7)",
     });
 
-    const bw = Math.min(240, r.width * 0.6);
-    const playBtn: Rect = { x: cx - bw / 2, y: r.height * 0.56, w: bw, h: 60 };
-    r.drawButton(playBtn, "▶  Play", { primary: true, time: this.time });
-    this.ui.playBtn = playBtn;
+    // Two modes: Classic (numbers & +/×) and Functions (adds x and ƒ).
+    const bw = Math.min(260, r.width * 0.62);
+    const y0 = r.height * 0.54;
+    const classicBtn: Rect = { x: cx - bw / 2, y: y0, w: bw, h: 58 };
+    r.drawButton(classicBtn, "▶  Classic", { primary: true, time: this.time });
+    this.ui.classicBtn = classicBtn;
 
-    const helpBtn: Rect = { x: cx - bw / 2, y: r.height * 0.56 + 76, w: bw, h: 48 };
+    const funcBtn: Rect = { x: cx - bw / 2, y: y0 + 70, w: bw, h: 58 };
+    r.drawButton(funcBtn, "ƒ  Functions", { primary: true, time: this.time });
+    this.ui.functionsBtn = funcBtn;
+    r.text(
+      "Functions mode adds the variable x and an evaluate operator",
+      cx,
+      y0 + 70 + 78,
+      { size: 13, color: "rgba(183,155,255,0.85)" },
+    );
+
+    const helpBtn: Rect = { x: cx - bw / 2, y: y0 + 156, w: bw, h: 44 };
     r.drawButton(helpBtn, this.showHelp ? "Hide rules" : "How to play");
     this.ui.helpBtn = helpBtn;
 
@@ -373,10 +403,6 @@ export class App {
 
   private drawRulesPanel(): void {
     const r = this.renderer;
-    const w = Math.min(560, r.width * 0.9);
-    const h = Math.min(300, r.height * 0.5);
-    const rect: Rect = { x: (r.width - w) / 2, y: r.height * 0.5 - h - 10, w, h };
-    r.drawPanel(rect);
     const lines = [
       "Build an arithmetic tree to reach the target score.",
       "",
@@ -385,16 +411,32 @@ export class App {
       "• + and × cards split a number into (number ○ 0),",
       "   sprouting a fresh 0 to fill.",
       "• Careful: × by an unfilled 0 zeroes the whole branch!",
-      "• Hit Evaluate to score. Clear the round → upgrade your deck.",
+      "• Evaluate to score. Clear the round → upgrade your deck.",
       "• Targets keep rising. See how far you can go.",
+      "",
+      "Functions mode adds two cards:",
+      "• x — a variable leaf (fills a 0-slot).",
+      "• ƒ — evaluate: ƒ turns a leaf into ƒ(F, a). The left F is",
+      "   a polynomial (may use x); the right a is the point to",
+      "   evaluate it at.  e.g.  ƒ(x×x, 3) = 9.",
     ];
-    let y = rect.y + 34;
+    const lineH = 23;
+    const w = Math.min(600, r.width * 0.92);
+    const h = Math.min(r.height * 0.9, 84 + lines.length * lineH);
+    const rect: Rect = { x: (r.width - w) / 2, y: (r.height - h) / 2, w, h };
+    r.drawDimmer(0.5);
+    r.drawPanel(rect);
+    let y = rect.y + 36;
     r.text("How to play", rect.x + rect.w / 2, y, { size: 22, weight: 800 });
     y += 34;
     for (const line of lines) {
-      r.text(line, rect.x + 24, y, { size: 15, align: "left", color: "rgba(234,240,255,0.85)" });
-      y += 25;
+      r.text(line, rect.x + 26, y, { size: 15, align: "left", color: "rgba(234,240,255,0.85)" });
+      y += lineH;
     }
+    r.text("(tap ? again to close)", rect.x + rect.w / 2, rect.y + h - 20, {
+      size: 12,
+      color: "rgba(234,240,255,0.45)",
+    });
   }
 
   private drawPlaying(dt: number, background = false): void {
@@ -596,8 +638,8 @@ export class App {
     let glyph = "＋";
     let color = "#7CF29B";
     if (offer.type === "add") {
-      glyph = offer.card.kind === "op" ? cardLabel(offer.card) : String(offer.card.value);
-      color = offer.card.kind === "op" ? (offer.card.op === "*" ? "#FFC46B" : "#7CF29B") : "#5ad1ff";
+      glyph = cardLabel(offer.card);
+      color = shopGlyphColor(offer.card);
     } else if (offer.type === "remove") {
       glyph = "－";
       color = "#ff6b8a";
@@ -684,12 +726,22 @@ export class App {
   debugState(): Record<string, unknown> {
     return {
       screen: this.screen,
+      mode: this.game.cfg.mode,
       round: this.game.round,
       target: this.game.target,
       score: this.game.currentScore,
       hand: this.game.hand.map((c) => cardLabel(c)),
       deckRemaining: this.game.roundDeck.length + this.game.hand.length,
       nodeCircles: this.ui.nodeCircles.map((c) => ({ id: c.id, x: Math.round(c.x), y: Math.round(c.y), r: Math.round(c.r), type: c.node.type })),
+      treeStr: treeToString(this.game.root),
+      treeNodes: listNodes(this.game.root).map((n) => ({
+        id: n.id,
+        type: n.type,
+        op: n.type === "op" ? n.op : undefined,
+        left: n.type === "op" ? n.left.id : undefined,
+        right: n.type === "op" ? n.right.id : undefined,
+        value: n.type === "value" ? n.value : undefined,
+      })),
       legalNow: [...this.legalNow],
     };
   }
@@ -702,4 +754,13 @@ export class App {
     }
     return [...counts.entries()].map(([k, v]) => `${v}×${k}`).join("  ");
   }
+}
+
+/** Accent colour for a card glyph in the shop (mirrors the bubble palette). */
+function shopGlyphColor(card: Card): string {
+  if (card.kind === "number") return "#5ad1ff";
+  if (card.kind === "var") return "#ff9be0";
+  if (card.op === "*") return "#FFC46B";
+  if (card.op === "@") return "#b79bff";
+  return "#7CF29B";
 }

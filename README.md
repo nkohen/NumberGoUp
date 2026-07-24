@@ -12,6 +12,13 @@ upgrade your deck, and see how far the number will go.
 ![title](docs/screenshots/title.png)
 ![playing](docs/screenshots/playing.png)
 
+There are two modes, chosen from the title screen:
+- **Classic** — numbers and `+`/`×` (the original spec).
+- **Functions** — adds the variable `x` and an evaluate operator `ƒ`, so you can
+  build a polynomial and evaluate it at a point: `ƒ(x×x, 3) = 9`.
+
+![functions](docs/screenshots/functions.png)
+
 ## Quick start
 
 ```bash
@@ -46,6 +53,12 @@ no runtime dependencies.
 5. **Clear & upgrade.** Beat the target to clear the round and pick one of three
    deck upgrades (add a card, thin a weak card, or promote a number). Targets
    keep rising — the run ends when you fall short.
+
+In **Functions mode** there are two extra cards: `x` (a variable leaf that fills
+a `0`-slot) and `ƒ` (evaluate). Playing `ƒ` on a leaf makes `ƒ(F, a)` — the left
+side `F` is a polynomial that may use `x`, and the right side `a` is the point to
+evaluate it at. Outside any `ƒ`, `x` is 0. See
+[`docs/GAME_DESIGN.md`](docs/GAME_DESIGN.md#functions) for the full rules.
 
 Controls: **drag** to place cards, **click** buttons, `M` to mute, `Enter`/`Space`
 to Play / Evaluate / restart.

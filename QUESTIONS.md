@@ -8,6 +8,13 @@ these are mostly small edits.
 
 **To play it right now:** `npm install && npm run dev`, then open the printed URL.
 
+> **Update (later that night):** per your follow-up message, I added a second
+> **Functions mode** (pick it on the title screen) with a variable card `x` and
+> a function-evaluation operator `ƒ`: `ƒ(F, a)` evaluates the polynomial `F`
+> (left, may contain `x`) at the point `a` (right). e.g. `ƒ(x×x, 3) = 9`. It's
+> fully working, tested, and documented; a couple of questions about it are at
+> the bottom (Q13–Q15).
+
 ---
 
 ## The one big decision I made without asking
@@ -88,6 +95,21 @@ softer/retro/chiptune, a background music loop)?
 
 ---
 
+## Questions about the new Functions mode
+
+- **Q13. `ƒ` and re-parenting.** Since operators only attach to leaves, `ƒ` works
+  best placed early (so it's the root and the whole tree is one evaluation). Did
+  you picture being able to build a polynomial *first* and then wrap the whole
+  thing in an evaluate (`ƒ`)? That's the "re-parenting" from Q4, and Functions
+  mode is where it would feel most natural. I can add it (mode-wide or just for
+  `ƒ`) if you want.
+- **Q14. Unbound `x`.** I made `x = 0` outside any `ƒ` (so every tree is always
+  well-defined). Alternative: forbid placing `x` unless it's inside a function
+  body. Preference?
+- **Q15. Separate tuning.** Functions can score much higher (evaluate a square at
+  a big point), so it may deserve its own target curve / starter deck rather than
+  sharing Classic's. Want me to tune it separately once you've played?
+
 ## What's done and verified
 
 - ✅ Full game loop: title → play → evaluate (merge animation) → shop → next
@@ -96,7 +118,10 @@ softer/retro/chiptune, a background music loop)?
   bursts, and the bottom-up merge-to-score animation you described.
 - ✅ Procedural sound effects + mute (persisted).
 - ✅ Deck-upgrade shop (add / remove / promote).
-- ✅ 28 passing unit tests on the pure core; type-checks; production build is
+- ✅ **Functions mode**: variable `x` + evaluate operator `ƒ`, with an
+  environment-aware merge animation (the `x` leaves visibly resolve to the point
+  they're evaluated at). Verified building `ƒ(x×x, 3) = 9` in-browser.
+- ✅ 38 passing unit tests on the pure core; type-checks; production build is
   ~12 KB gzipped with zero runtime deps.
 - ✅ Verified end-to-end in headless Chrome (screenshots in `docs/screenshots/`).
 

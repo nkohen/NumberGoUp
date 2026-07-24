@@ -16,9 +16,11 @@ import {
   cardKey,
   numberCard,
   opCard,
+  varCard,
   Op,
 } from "./cards";
 import type { Rng } from "./rng";
+import type { GameMode } from "./game";
 
 export type Upgrade =
   | { readonly type: "add"; readonly card: Card; readonly title: string; readonly desc: string }
@@ -75,6 +77,7 @@ export function generateOffers(
   rng: Rng,
   round: number,
   count = 3,
+  mode: GameMode = "classic",
 ): Upgrade[] {
   const offers: Upgrade[] = [];
   const seen = new Set<string>();
@@ -119,6 +122,28 @@ export function generateOffers(
             : "Shuffle an add card into your deck.",
       },
       key: `add-op${op}`,
+    });
+  }
+
+  // Functions mode: also offer the variable `x` and the evaluate operator `ƒ`.
+  if (mode === "functions") {
+    candidates.push({
+      up: {
+        type: "add",
+        card: varCard(),
+        title: "Add an x",
+        desc: "Shuffle a variable card into your deck.",
+      },
+      key: "add-x",
+    });
+    candidates.push({
+      up: {
+        type: "add",
+        card: opCard("@"),
+        title: "Add a ƒ",
+        desc: "Shuffle an evaluate card into your deck.",
+      },
+      key: "add-op@",
     });
   }
 

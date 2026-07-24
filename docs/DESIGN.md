@@ -126,6 +126,29 @@ drop targets pulse green while dragging. The rounded "Baloo 2" webfont reinforce
 the friendly, bubbly feel (with a system-font fallback). See QUESTIONS.md #7 for
 palette/theme preferences.
 
+## 9. Functions mode (added on request)
+
+A second mode where the tree can contain the variable `x` and a
+function-application operator `ƒ`. `ƒ(F, a)` evaluates the polynomial `F` (left
+subtree, may contain `x`) at the point `a` (right subtree) — implemented as
+"evaluate `F` with `x` bound to `eval(a)`". Key decisions:
+
+- **`ƒ` is modeled as just another binary operator** (`@` internally) so it
+  reuses all the existing placement/animation machinery; only evaluation and
+  colour differ. `x` is a new leaf kind alongside `value`.
+- **Dynamic scoping with `x = 0` outside any `ƒ`.** This keeps every tree
+  well-defined without special "unbound variable" states or placement
+  restrictions, at the cost of allowing (harmless) `x` leaves outside a
+  function. The nearest enclosing `ƒ` wins; nested `ƒ`s rebind.
+- **No re-parenting still applies**, so `ƒ` is strongest placed early (root).
+  See QUESTIONS.md #4/#13 — this is the one spot where a wrap/re-parent move
+  would feel especially natural (wrap a finished polynomial in an evaluate).
+- **Modes share the target curve for now**; the polynomial-at-a-point mechanic
+  scales faster, so Functions may want its own curve after playtesting.
+
+Everything lives behind a `GameMode` in `DEFAULT_CONFIG`/`configForMode`, with a
+mode picker on the title screen. See [`GAME_DESIGN.md`](GAME_DESIGN.md#functions).
+
 ## 8. Things intentionally left out of v0.1
 
 Persistence of runs, a tutorial beyond the rules card, animations for the shop

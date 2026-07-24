@@ -23,7 +23,7 @@ describe("tree placement & evaluation", () => {
     const t = newTree();
     const res = place(t, 0, numberCard(2))!;
     expect(res).not.toBeNull();
-    expect(res.kind).toBe("number-on-slot");
+    expect(res.kind).toBe("leaf-on-slot");
     expect(res.placedNodeId).toBe(0); // id preserved
     expect(res.newNodeIds).toEqual([]);
     expect(evaluate(res.tree.root)).toBe(2);
@@ -39,7 +39,7 @@ describe("tree placement & evaluation", () => {
     let t = newTree();
     t = place(t, 0, numberCard(2))!.tree; // root is value(2), id 0
     const res = place(t, 0, opCard("*"))!;
-    expect(res.kind).toBe("op-on-value");
+    expect(res.kind).toBe("op-on-leaf");
     // op node + new slot are new; left child reuses the original value id (0)
     expect(res.newNodeIds).toHaveLength(2);
     const root = res.tree.root;

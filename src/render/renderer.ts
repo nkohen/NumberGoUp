@@ -77,6 +77,8 @@ const THEME = {
   number: { a: "#5ad1ff", b: "#2b7fff", glow: "rgba(90,209,255,0.55)" },
   add: { a: "#7CF29B", b: "#27B36B", glow: "rgba(124,242,155,0.5)" },
   mul: { a: "#FFC46B", b: "#F0862B", glow: "rgba(255,196,107,0.5)" },
+  variable: { a: "#ff9be0", b: "#d24fb8", glow: "rgba(255,155,224,0.5)" },
+  apply: { a: "#b79bff", b: "#7a4fe0", glow: "rgba(183,155,255,0.5)" },
   edge: "rgba(180,200,255,0.5)",
   text: "#eaf0ff",
   textDim: "rgba(234,240,255,0.6)",
@@ -296,11 +298,24 @@ export class Renderer {
   private labelFor(node: TreeNode): string {
     if (node.type === "slot") return "0";
     if (node.type === "value") return String(node.value);
-    return node.op === "*" ? "×" : "+";
+    if (node.type === "var") return "x";
+    switch (node.op) {
+      case "*":
+        return "×";
+      case "@":
+        return "ƒ";
+      default:
+        return "+";
+    }
   }
 
   private colorsFor(node: TreeNode): { a: string; b: string; glow: string } {
-    if (node.type === "op") return node.op === "*" ? THEME.mul : THEME.add;
+    if (node.type === "var") return THEME.variable;
+    if (node.type === "op") {
+      if (node.op === "*") return THEME.mul;
+      if (node.op === "@") return THEME.apply;
+      return THEME.add;
+    }
     return THEME.number;
   }
 
@@ -512,8 +527,7 @@ export class Renderer {
     ctx.shadowOffsetY = 0;
 
     // colored token in the middle
-    const colors =
-      card.kind === "op" ? (card.op === "*" ? THEME.mul : THEME.add) : THEME.number;
+    const colors = colorsForCard(card);
     const cx = x + w / 2;
     const cy = y + h * 0.42;
     const r = Math.min(w, h) * 0.28;
@@ -535,9 +549,7 @@ export class Renderer {
     // caption
     ctx.fillStyle = THEME.textDim;
     ctx.font = `600 ${Math.max(9, h * 0.1)}px ${FONT}`;
-    const caption =
-      card.kind === "op" ? (card.op === "*" ? "MULTIPLY" : "ADD") : "NUMBER";
-    ctx.fillText(caption, cx, y + h - h * 0.16);
+    ctx.fillText(captionForCard(card), cx, y + h - h * 0.16);
 
     // border
     ctx.strokeStyle = "rgba(150,170,255,0.25)";
@@ -765,9 +777,25 @@ export class Renderer {
 
   /** Colour associated with a card (for particle bursts). */
   static particleColor(card: Card): string {
-    if (card.kind === "number") return THEME.number.a;
-    return card.op === "*" ? THEME.mul.a : THEME.add.a;
+    return colorsForCard(card).a;
   }
+}
+
+/** Colour ramp for a card by kind (numbers, x, and each operator). */
+function colorsForCard(card: Card): { a: string; b: string; glow: string } {
+  if (card.kind === "number") return THEME.number;
+  if (card.kind === "var") return THEME.variable;
+  if (card.op === "*") return THEME.mul;
+  if (card.op === "@") return THEME.apply;
+  return THEME.add;
+}
+
+function captionForCard(card: Card): string {
+  if (card.kind === "number") return "NUMBER";
+  if (card.kind === "var") return "VARIABLE";
+  if (card.op === "*") return "MULTIPLY";
+  if (card.op === "@") return "EVALUATE";
+  return "ADD";
 }
 
 // --- helpers ------------------------------------------------------------------

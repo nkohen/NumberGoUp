@@ -2,8 +2,41 @@
  * Small animation toolkit: easing functions, a frame-rate-independent smoothing
  * helper, and the "evaluate" merge-animation sequencer.
  */
-import { TreeNode, NodeId, evaluate, listNodes } from "../core/tree";
+import { TreeNode, NodeId, listNodes } from "../core/tree";
 import { nodeHeights, parentMap } from "./layout";
+
+/**
+ * Fill `map` with each node's evaluated value, threading the variable
+ * environment `xEnv` through `@` (apply) nodes exactly like `evaluate` does.
+ * Returns this node's value.
+ */
+function computeValues(node: TreeNode, xEnv: number, map: Map<NodeId, number>): number {
+  let v: number;
+  switch (node.type) {
+    case "slot":
+      v = 0;
+      break;
+    case "value":
+      v = node.value;
+      break;
+    case "var":
+      v = xEnv;
+      break;
+    case "op": {
+      if (node.op === "@") {
+        const arg = computeValues(node.right, xEnv, map);
+        v = computeValues(node.left, arg, map); // function evaluated at `arg`
+      } else {
+        const l = computeValues(node.left, xEnv, map);
+        const r = computeValues(node.right, xEnv, map);
+        v = node.op === "+" ? l + r : l * r;
+      }
+      break;
+    }
+  }
+  map.set(node.id, v);
+  return v;
+}
 
 export function clamp01(x: number): number {
   return x < 0 ? 0 : x > 1 ? 1 : x;
@@ -66,9 +99,12 @@ export class EvaluateAnimation {
   constructor(root: TreeNode) {
     this.heights = nodeHeights(root);
     this.parents = parentMap(root);
+    // Compute each node's displayed value WITH the variable environment
+    // propagated through `@` (apply) nodes, so `x` leaves reveal the point they
+    // were evaluated at and apply nodes reveal the function's value there.
+    computeValues(root, 0, this.values);
     let mh = 0;
     for (const n of listNodes(root)) {
-      this.values.set(n.id, evaluate(n));
       mh = Math.max(mh, this.heights.get(n.id) ?? 0);
     }
     this.maxHeight = mh;
