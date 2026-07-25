@@ -99,6 +99,19 @@ export class Renderer {
   private particles: Particle[] = [];
   private lastNodeCircles: NodeCircle[] = [];
 
+  // True once every bubble has finished spawning and eased onto its target.
+  // Drives render-on-demand: while false, the app must keep painting.
+  private bubblesSettled = true;
+  // Cached background gradient — depends only on canvas height, so rebuilding it
+  // every frame is wasted allocation. Invalidated on resize.
+  private bgGradient: CanvasGradient | null = null;
+  private bgGradientH = -1;
+
+  /** Whether the renderer still has motion to draw (particles or un-settled bubbles). */
+  get busy(): boolean {
+    return this.particles.length > 0 || !this.bubblesSettled;
+  }
+
   constructor(private canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("2D canvas context unavailable");
@@ -148,11 +161,15 @@ export class Renderer {
   // --- frame lifecycle --------------------------------------------------------
 
   beginFrame(dt: number): void {
-    // background gradient
-    const g = this.ctx.createLinearGradient(0, 0, 0, this.height);
-    g.addColorStop(0, THEME.bgTop);
-    g.addColorStop(1, THEME.bgBottom);
-    this.ctx.fillStyle = g;
+    // background gradient (cached — only rebuilt when the height changes)
+    if (!this.bgGradient || this.bgGradientH !== this.height) {
+      const g = this.ctx.createLinearGradient(0, 0, 0, this.height);
+      g.addColorStop(0, THEME.bgTop);
+      g.addColorStop(1, THEME.bgBottom);
+      this.bgGradient = g;
+      this.bgGradientH = this.height;
+    }
+    this.ctx.fillStyle = this.bgGradient;
     this.ctx.fillRect(0, 0, this.width, this.height);
     this.drawStars();
     this.updateParticles(dt);
@@ -242,6 +259,8 @@ export class Renderer {
     mapParents(root);
 
     // Ease animated bubble views toward targets; spawn new ones with a pop.
+    // Track whether everything has come to rest so the app can stop repainting.
+    let settled = true;
     const alive = new Set<NodeId>();
     for (const c of circles) {
       alive.add(c.id);
@@ -256,10 +275,19 @@ export class Renderer {
       bv.y = smooth(bv.y, c.y, 0.25, dt);
       bv.r = smooth(bv.r, c.r, 0.3, dt);
       bv.born = true;
+      if (
+        bv.spawn < 1 ||
+        Math.abs(bv.x - c.x) > 0.5 ||
+        Math.abs(bv.y - c.y) > 0.5 ||
+        Math.abs(bv.r - c.r) > 0.5
+      ) {
+        settled = false;
+      }
     }
     for (const id of [...this.bubbles.keys()]) {
       if (!alive.has(id)) this.bubbles.delete(id);
     }
+    this.bubblesSettled = settled;
 
     // Edges first (under bubbles).
     this.ctx.lineCap = "round";
@@ -548,9 +576,8 @@ export class Renderer {
         this.drawCardGhost(x, y, cardW, cardH);
         continue;
       }
-      const bob = Math.sin(opts.time * 2 + i) * 3;
       const playable = opts.playableFlags ? opts.playableFlags[i] : true;
-      this.drawCard(x, y + bob, cardW, cardH, hand[i], { dim: !playable });
+      this.drawCard(x, y, cardW, cardH, hand[i], { dim: !playable });
     }
     return rects;
   }

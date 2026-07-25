@@ -111,6 +111,13 @@ export class App {
   private screen: Screen = "title";
   private time = 0;
   private lastTs = 0;
+  /**
+   * Render-on-demand flag. The loop only repaints when something changed
+   * (`dirty`) or something is mid-animation (`isAnimating()`). Idling here
+   * instead of painting a fresh full-screen frame at 60fps is the main battery
+   * win on mobile. Set via `invalidate()` from every input/state change.
+   */
+  private dirty = true;
 
   private drag: DragState | null = null;
   private hoverNodeId: NodeId | null = null;
@@ -168,7 +175,10 @@ export class App {
   // --- event wiring -----------------------------------------------------------
 
   private bindEvents(): void {
-    const onResize = () => this.renderer.resize();
+    const onResize = () => {
+      this.renderer.resize();
+      this.invalidate();
+    };
     window.addEventListener("resize", onResize);
     window.addEventListener("orientationchange", onResize);
     // Mobile browsers show/hide the address bar without firing `resize`; the
@@ -192,6 +202,7 @@ export class App {
   }
 
   private onKey = (e: KeyboardEvent): void => {
+    this.invalidate();
     // Enter/space are only used on the title & game-over screens. They are NOT
     // bound to Evaluate during play — an accidental keypress there could end a
     // run, so evaluating is deliberately click-only.
@@ -203,6 +214,7 @@ export class App {
   };
 
   private onPointerDown = (e: PointerEvent): void => {
+    this.invalidate();
     sound.unlock();
     const { x, y } = this.pointerPos(e);
 
@@ -428,6 +440,9 @@ export class App {
   }
 
   private onPointerMove = (e: PointerEvent): void => {
+    // Only a live drag changes what's on screen; idle moves (no button held on
+    // desktop, impossible on touch) shouldn't wake the render loop.
+    if (this.drag) this.invalidate();
     const { x, y } = this.pointerPos(e);
     if (this.drag) {
       const dx = x - this.drag.startX;
@@ -446,6 +461,7 @@ export class App {
 
   private onPointerUp = (e: PointerEvent): void => {
     if (!this.drag) return;
+    this.invalidate();
     const { x, y } = this.pointerPos(e);
     const drag = this.drag;
     this.drag = null;
@@ -579,6 +595,7 @@ export class App {
   private flash(msg: string): void {
     this.toastMsg = msg;
     this.toastUntil = this.time + 2.4;
+    this.invalidate();
   }
 
   /**
@@ -618,6 +635,7 @@ export class App {
     this.showDeck = false;
     this.hintShown = true;
     sound.click();
+    this.invalidate();
   }
 
   /** Title-screen "Continue": resume the most recent local autosave. */
@@ -751,9 +769,45 @@ export class App {
 
   // --- main loop --------------------------------------------------------------
 
+  /** Request a repaint on the next frame (call on any input or state change). */
+  private invalidate(): void {
+    this.dirty = true;
+  }
+
+  /**
+   * Whether anything on screen is still moving and therefore needs continuous
+   * repaints. When this is false and nothing is `dirty`, the loop parks itself
+   * (an empty rAF tick) instead of repainting — saving battery on mobile.
+   */
+  private isAnimating(): boolean {
+    if (this.evalAnim) return true;
+    // While a card is held, the legal-target glow/pulse animates off `time`, so
+    // keep painting even when the finger isn't moving.
+    if (this.drag) return true;
+    if (this.screen === "evaluating" || this.screen === "won") return true;
+    if (this.tutorialActive) return true; // scripted beats drive their own motion
+    if (this.toastMsg && this.time < this.toastUntil) return true;
+    if (this.renderer.busy) return true; // particles or un-settled bubble tweens
+    // Depth-cap beam is mid-fade (it snaps to its target once close — see
+    // drawDepthBeamCue — so this is only true while actually transitioning).
+    if (this.screen === "playing" || this.screen === "shop") {
+      const atCap = treeHeight(this.game.root) >= this.game.currentDepth ? 1 : 0;
+      if (this.depthBeam !== atCap) return true;
+    }
+    return false;
+  }
+
   private loop = (ts: number): void => {
     const dt = this.lastTs ? Math.min(0.05, (ts - this.lastTs) / 1000) : 0.016;
     this.lastTs = ts;
+
+    // Render-on-demand: skip the whole frame when idle so the phone isn't
+    // repainting a static screen 60 times a second.
+    if (!this.dirty && !this.isAnimating()) {
+      requestAnimationFrame(this.loop);
+      return;
+    }
+    this.dirty = false;
     this.time += dt;
 
     this.renderer.beginFrame(dt);
@@ -1532,6 +1586,9 @@ export class App {
     const target = atCap ? 1 : 0;
     // Simple exponential ease toward the target intensity.
     this.depthBeam += (target - this.depthBeam) * Math.min(1, dt * 10);
+    // Snap once close so it reaches a true resting value — otherwise it would
+    // asymptote forever and keep the render loop awake (see isAnimating).
+    if (Math.abs(target - this.depthBeam) < 0.01) this.depthBeam = target;
     // Position the beam just below the lowest bubble so it never cuts through
     // the bottom row; fall back to the tree-area floor if there are no circles.
     const circles = this.ui.nodeCircles;
@@ -1596,6 +1653,9 @@ export class App {
     if (this.evalAnim && this.evalAnim.done) {
       this.evalAnim = null;
       this.rootBurstDone = false;
+      // The screen changes below; make sure the new screen gets painted even
+      // though the eval animation (which kept the loop awake) is now finished.
+      this.invalidate();
       if (this.game.phase === "won") {
         // Beat the final round — win the run with a bubble celebration.
         sound.win();

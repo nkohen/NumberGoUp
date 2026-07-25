@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "screenshots": "node scripts/screenshots.mjs",
+    "benchmark": "node scripts/benchmark.mjs",
     "deploy": "bash scripts/deploy-web.sh"
   },
   "devDependencies": {
