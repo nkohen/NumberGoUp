@@ -333,6 +333,7 @@ export class App {
           hand: this.game.hand.map((c) => cardLabel(c)),
         });
         this.autosave();
+        this.maybeAutoResolve(); // if the redraw landed unplayable, skip it too
       }
       return;
     }
@@ -398,6 +399,7 @@ export class App {
         this.logRoundStart();
         this.screen = "playing";
         this.autosave();
+        this.maybeAutoResolve(); // skip an unplayable opening hand
       } else {
         sound.error();
       }
@@ -421,6 +423,7 @@ export class App {
         this.logRoundStart();
         this.screen = "playing";
         this.autosave();
+        this.maybeAutoResolve(); // skip an unplayable opening hand
         return;
       }
     }
@@ -441,6 +444,7 @@ export class App {
       this.logRoundStart();
       this.screen = "playing";
       this.autosave();
+      this.maybeAutoResolve(); // skip an unplayable opening hand
     }
   }
 
@@ -566,6 +570,7 @@ export class App {
     this.hintShown = true;
     this.logRunStart("new");
     this.logRoundStart();
+    this.maybeAutoResolve(); // skip an unplayable opening hand
   }
 
   private restart(): void {
@@ -577,6 +582,7 @@ export class App {
     this.logRunStart("restart");
     this.logRoundStart();
     this.autosave();
+    this.maybeAutoResolve(); // skip an unplayable opening hand
   }
 
   // --- save / load ------------------------------------------------------------
@@ -748,6 +754,10 @@ export class App {
    *  - **No legal move left** anywhere in the remaining pool (re-draws included)
    *    → auto-evaluate too. The tree can't grow, so the run ends here; the
    *    existing evaluate→game-over animation plays without a forced click.
+   *  - **Unplayable hand, but the deck can still progress** → auto-redraw. A
+   *    hand with no legal move where a re-draw is free is not a real decision;
+   *    forcing the player to click the free "Redraw" button just to continue
+   *    reads as a confusing chore, so we do it for them.
    */
   private maybeAutoResolve(): void {
     if (this.screen !== "playing" || this.evalAnim) return;
@@ -760,6 +770,27 @@ export class App {
       // The stuck→game-over path stays disabled in the scripted tutorial.
       this.flash("No legal moves left — evaluating…");
       this.beginEvaluate(true);
+    } else if (!this.tutorialActive && !g.canPlayAny()) {
+      // Hand has no legal move but the round can still progress (a playable
+      // card remains in the deck). Redraw automatically until the hand can be
+      // played. These redraws are free (no focus, no fish escalation — see
+      // Game.redrawCost) so this is pure convenience with zero gameplay cost.
+      // The guard is a belt-and-suspenders cap against an impossible infinite
+      // loop; a legal card is known to exist, so this exits after a few tries.
+      let guard = 0;
+      while (!g.canPlayAny() && g.canRedraw() && guard++ < 200) {
+        g.redraw();
+      }
+      if (g.canPlayAny()) {
+        sound.pickup();
+        this.flash("No playable cards — redrew your hand");
+        devLog("auto_redraw", {
+          round: g.round,
+          turn: g.turn,
+          hand: g.hand.map((c) => cardLabel(c)),
+        });
+        this.autosave();
+      }
     }
   }
 
