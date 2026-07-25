@@ -19,9 +19,8 @@ interface VBubble {
   glow: string;
 }
 
-const GRAVITY = 1400; // px/s²
-const RESTITUTION = 0.82; // energy kept on a wall bounce
-const FLOOR_FRICTION = 0.985; // horizontal damping on floor contact
+// Zero gravity + perfectly elastic wall bounces: energy is conserved, so the
+// bubbles drift and ricochet around the screen forever instead of settling.
 
 export class VictoryBubbles {
   private bubbles: VBubble[] = [];
@@ -52,9 +51,10 @@ export class VictoryBubbles {
     const card = this.queue.shift();
     if (!card) return;
     const style = Renderer.bubbleStyle(card);
-    // Launch mostly upward with a wide horizontal spread, like a confetti cannon.
-    const angle = -Math.PI / 2 + (Math.random() - 0.5) * 1.5; // around straight up
-    const speed = 900 + Math.random() * 700;
+    // Spray out in every direction from the deck; with no gravity they keep this
+    // speed forever, ricocheting off the walls.
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 220 + Math.random() * 340;
     this.bubbles.push({
       x: this.ox + (Math.random() - 0.5) * 40,
       y: this.oy,
@@ -78,24 +78,23 @@ export class VictoryBubbles {
       this.spawnOne();
     }
     for (const b of this.bubbles) {
-      b.vy += GRAVITY * step;
       b.x += b.vx * step;
       b.y += b.vy * step;
-      // Bounce off the four walls (top inset keeps them below the HUD title).
+      // Perfectly elastic wall bounces (top inset keeps them below the HUD).
+      // No gravity or damping, so speed is preserved and they never settle.
       if (b.x < b.r) {
         b.x = b.r;
-        b.vx = Math.abs(b.vx) * RESTITUTION;
+        b.vx = Math.abs(b.vx);
       } else if (b.x > width - b.r) {
         b.x = width - b.r;
-        b.vx = -Math.abs(b.vx) * RESTITUTION;
+        b.vx = -Math.abs(b.vx);
       }
-      if (b.y > height - b.r) {
-        b.y = height - b.r;
-        b.vy = -Math.abs(b.vy) * RESTITUTION;
-        b.vx *= FLOOR_FRICTION;
-      } else if (b.y < topInset + b.r) {
+      if (b.y < topInset + b.r) {
         b.y = topInset + b.r;
-        b.vy = Math.abs(b.vy) * RESTITUTION;
+        b.vy = Math.abs(b.vy);
+      } else if (b.y > height - b.r) {
+        b.y = height - b.r;
+        b.vy = -Math.abs(b.vy);
       }
     }
   }
