@@ -26,23 +26,33 @@ import { devLog } from "../dev/devlog";
 type Screen = "title" | "playing" | "evaluating" | "shop" | "gameover";
 
 /** A single scripted beat of the interactive tutorial. */
-type TutPhase = "play" | "evaluate" | "shop-explain" | "shop-choice" | "outro";
+type TutPhase = "play" | "evaluate" | "explain" | "choice" | "outro";
+/** A UI region to ring for the current beat. */
+type TutHighlight =
+  | "evaluate" | "options" | "actions" | "option0"
+  | "grow" | "reroll" | "skip" | "redraw";
+/** The scripted shop action a "choice" beat performs when clicked. */
+type TutChoice = "upgrade0" | "grow" | "reroll" | "skip";
 interface TutBeat {
   phase: TutPhase;
   text: string;
-  /** Auto-advance predicate (used by play / evaluate / shop-choice beats). */
+  /** Auto-advance predicate (play / evaluate / choice beats). */
   done: boolean;
   /** Hand-card index to highlight & allow (play beats). */
   hand?: number;
   /** Tree-node id to highlight as the drop target (play beats). */
   node?: number;
-  /** A UI region to ring: the Evaluate button, shop options, etc. */
-  highlight?: "evaluate" | "options" | "actions" | "option0";
+  /** A UI region to ring. */
+  highlight?: TutHighlight;
+  /** For "choice" beats: which shop button/action this beat requires. */
+  choice?: TutChoice;
+  /** If set, entering this beat (re)loads that scripted scene once. */
+  scene?: number;
 }
 /** Fixed seed so the tutorial's hand order & shop offers are deterministic. */
 const TUTORIAL_SEED = 42;
 /** Step index of the terminal outro beat. */
-const TUTORIAL_OUTRO = 7;
+const TUTORIAL_OUTRO = 23;
 
 interface DragState {
   handIndex: number;
@@ -93,8 +103,10 @@ export class App {
   private showDeck = false;
   /** True while the interactive tutorial is running. */
   private tutorialActive = false;
-  /** Current guided step in the interactive tutorial (5 = outro). */
+  /** Current guided step (beat index) in the interactive tutorial. */
   private tutorialStep = 0;
+  /** Which scripted scene is currently loaded (-1 = none yet). */
+  private tutScene = -1;
   private hintShown = true;
   /** Eased 0..1 intensity of the "depth limit reached" beam. */
   private depthBeam = 0;
@@ -725,58 +737,134 @@ export class App {
   // --- interactive tutorial ---------------------------------------------------
 
   /**
-   * Begin the guided tutorial: a tiny scripted deck (2, 2, ×) → target 4 on a
-   * FIXED seed so the hand order and shop offers are deterministic and can be
-   * scripted. Every action is highlighted and locked; the player just follows.
+   * Begin the guided tutorial — a 3-round scripted run (FIXED seed) that
+   * demonstrates every mechanic: numbers, ×, +, the ×0 trap, evaluating,
+   * precision/focus, upgrading, GROWing the tree, re-draw, re-roll and skip.
+   * Every action is highlighted and input is locked to the scripted move.
    */
   private startTutorial(): void {
     this.game = new Game(configForMode("classic"), TUTORIAL_SEED);
-    this.game.startRun([numberCard(2), numberCard(2), opCard("*")]);
     this.tutorialActive = true;
     this.tutorialStep = 0;
+    this.tutScene = -1; // forces scene 1 to load on the first tick
     this.drag = null;
     this.screen = "playing";
     this.hintShown = false;
+    this.loadTutorialScene(1);
   }
 
   private endTutorial(): void {
     this.tutorialActive = false;
     this.tutorialStep = 0;
+    this.tutScene = -1;
     this.drag = null;
     this.showHelp = false;
     this.showDeck = false;
     this.screen = "title";
   }
 
-  /** Descriptor for the current scripted beat (text, what to highlight, gate). */
+  /** Load a scripted round for the tutorial (deck / target / depth). */
+  private loadTutorialScene(n: number): void {
+    this.tutScene = n;
+    const g = this.game;
+    if (n === 1) {
+      g.focus = 0;
+      g.startScriptedRound([numberCard(2), numberCard(2), opCard("*")], 4, 2);
+    } else if (n === 2) {
+      g.startScriptedRound([numberCard(3), numberCard(3), opCard("+")], 6, 2);
+    } else if (n === 3) {
+      g.startScriptedRound(
+        [numberCard(2), numberCard(3), numberCard(4), opCard("*"), opCard("*")],
+        24,
+        3,
+      );
+    }
+    this.screen = "playing";
+  }
+
+  /** Descriptor for the current scripted beat (text, highlight, gate, scene). */
   private tutBeat(): TutBeat {
     const g = this.game;
-    const firstNumber = () => g.hand.findIndex((c) => c.kind === "number");
-    const firstOp = () => g.hand.findIndex((c) => c.kind === "op");
+    const num = () => g.hand.findIndex((c) => c.kind === "number");
+    const op = () => g.hand.findIndex((c) => c.kind === "op");
     const slot = () => listNodes(g.root).find((n) => n.type === "slot")?.id;
     const value = () => listNodes(g.root).find((n) => n.type === "value")?.id;
+    const values = () => listNodes(g.root).filter((n) => n.type === "value").length;
+    const ops = () => listNodes(g.root).filter((n) => n.type === "op").length;
+    const shop = this.screen === "shop";
     switch (this.tutorialStep) {
+      // --- Round 1: numbers, ×, the ×0 trap, precision --------------------
       case 0:
-        return { phase: "play", done: g.root.type !== "slot", hand: firstNumber(), node: slot(),
+        return { phase: "play", scene: 1, done: g.root.type !== "slot", hand: num(), node: slot(),
           text: "Goal: reach the target of 4.  Drag the highlighted 2 onto the glowing bubble." };
       case 1:
-        return { phase: "play", done: g.root.type === "op", hand: firstOp(), node: value(),
+        return { phase: "play", done: g.root.type === "op", hand: op(), node: value(),
           text: "Now multiply — drag the × card onto your 2." };
       case 2:
-        return { phase: "play", done: g.currentScore >= g.target, hand: firstNumber(), node: slot(),
-          text: "See it? × by an empty 0 is 0. Drag the last 2 into the empty bubble." };
+        return { phase: "play", done: g.currentScore >= g.target, hand: num(), node: slot(),
+          text: "× by an empty 0 is 0! Drag the last 2 into the empty bubble." };
       case 3:
-        return { phase: "evaluate", done: this.screen === "shop", highlight: "evaluate",
+        return { phase: "evaluate", done: shop, highlight: "evaluate",
           text: "2 × 2 = 4 — exactly the target! Tap the highlighted Evaluate ✓." };
       case 4:
-        return { phase: "shop-explain", done: false, highlight: "options",
-          text: "Cleared! An exact landing banked +5 ◆ focus. These are upgrade choices — tap anywhere to continue." };
+        return { phase: "explain", done: false, highlight: "options",
+          text: "Cleared! A PERFECT landing banked +5 ◆ focus. These are deck upgrades — tap to continue." };
       case 5:
-        return { phase: "shop-explain", done: false, highlight: "actions",
-          text: "You can also spend ◆ focus: Grow the tree, Re-roll offers, or Skip (+1 ◆). Tap to continue." };
+        return { phase: "explain", done: false, highlight: "actions",
+          text: "Below you can spend ◆ focus: Grow the tree, Re-roll offers, or Skip for +1 ◆. Tap to continue." };
       case 6:
-        return { phase: "shop-choice", done: g.round >= 2, highlight: "option0",
-          text: "For the tutorial, tap the highlighted upgrade to finish." };
+        return { phase: "choice", choice: "upgrade0", done: g.round >= 2, highlight: "option0",
+          text: "Let's take an upgrade — tap the highlighted card." };
+      // --- Round 2: addition, then GROW the tree --------------------------
+      case 7:
+        return { phase: "play", scene: 2, done: g.root.type !== "slot", hand: num(), node: slot(),
+          text: "Round 2 — now try ADDITION. Drag the highlighted 3 onto the bubble." };
+      case 8:
+        return { phase: "play", done: g.root.type === "op", hand: op(), node: value(),
+          text: "Drag the + onto your 3." };
+      case 9:
+        return { phase: "play", done: g.currentScore >= g.target, hand: num(), node: slot(),
+          text: "Fill the empty bubble with the other 3 → 3 + 3 = 6." };
+      case 10:
+        return { phase: "evaluate", done: shop, highlight: "evaluate",
+          text: "3 + 3 = 6 — the target! Tap Evaluate ✓." };
+      case 11:
+        return { phase: "explain", done: false, highlight: "grow",
+          text: "Your tree only holds 4 numbers at depth 2. Spend ◆ focus to GROW it deeper. Tap to continue." };
+      case 12:
+        return { phase: "choice", choice: "grow", done: g.round >= 3, highlight: "grow",
+          text: "Tap Grow ↑ to make your tree one level deeper (2 → 3)." };
+      // --- Round 3: bigger build, re-draw, re-roll, skip ------------------
+      case 13:
+        return { phase: "explain", scene: 3, done: false, highlight: "redraw",
+          text: "Depth 3 now — you can fit more numbers. Tip: Re-draw (bottom-left) swaps your hand to fish for a card. Tap to continue." };
+      case 14:
+        return { phase: "play", done: values() >= 1, hand: num(), node: slot(),
+          text: "Let's build a bigger one: drag the highlighted number onto the bubble." };
+      case 15:
+        return { phase: "play", done: ops() >= 1, hand: op(), node: value(),
+          text: "Drag a × onto a number." };
+      case 16:
+        return { phase: "play", done: values() >= 2, hand: num(), node: slot(),
+          text: "Fill the empty bubble with a number." };
+      case 17:
+        return { phase: "play", done: ops() >= 2, hand: op(), node: value(),
+          text: "Multiply again — drag the last × onto a number." };
+      case 18:
+        return { phase: "play", done: values() >= 3, hand: num(), node: slot(),
+          text: "Fill the last bubble → 2 × 3 × 4 = 24." };
+      case 19:
+        return { phase: "evaluate", done: shop, highlight: "evaluate",
+          text: "24 — exactly the target! Tap Evaluate ✓." };
+      case 20:
+        return { phase: "explain", done: false, highlight: "reroll",
+          text: "Two last tools: Re-roll draws fresh offers, Skip banks +1 ◆. Tap to continue." };
+      case 21:
+        return { phase: "choice", choice: "reroll", done: g.rerollCount >= 1, highlight: "reroll",
+          text: "Tap Re-roll ⟳ to draw a new set of offers." };
+      case 22:
+        return { phase: "choice", choice: "skip", done: g.round >= 4, highlight: "skip",
+          text: "Now tap Skip to bank +1 ◆ and finish." };
       default:
         return { phase: "outro", done: true, text: "" };
     }
@@ -797,7 +885,7 @@ export class App {
       }
       return;
     }
-    // Skip is always available during the guided steps.
+    // Skip-tutorial is always available during the guided steps.
     if (this.ui.tutSkip && pointInRect(x, y, this.ui.tutSkip)) {
       sound.click();
       this.endTutorial();
@@ -819,35 +907,64 @@ export class App {
       case "evaluate":
         if (this.ui.evaluateBtn && pointInRect(x, y, this.ui.evaluateBtn)) this.beginEvaluate();
         return;
-      case "shop-explain":
-        // Buttons are locked; any tap advances the explanation.
+      case "explain":
+        // Everything else is locked; any tap advances the explanation.
         sound.click();
         this.tutorialStep += 1;
         return;
-      case "shop-choice": {
-        // Only the scripted (first) upgrade is clickable.
-        const opt = this.ui.shopOptions[0];
-        if (opt && pointInRect(x, y, opt)) {
+      case "choice":
+        this.doTutorialChoice(beat.choice!, x, y);
+        return;
+    }
+  }
+
+  /** Perform a scripted shop action if its (only-clickable) button was tapped. */
+  private doTutorialChoice(choice: TutChoice, x: number, y: number): void {
+    const hit = (r?: Rect) => r !== undefined && pointInRect(x, y, r);
+    switch (choice) {
+      case "upgrade0":
+        if (hit(this.ui.shopOptions[0])) {
           sound.upgrade();
           this.game.chooseUpgrade(0);
+          this.screen = "playing";
         }
         return;
-      }
+      case "grow":
+        if (hit(this.ui.shopGrow) && this.game.growTree()) {
+          sound.upgrade();
+          this.screen = "playing";
+        }
+        return;
+      case "reroll":
+        if (hit(this.ui.shopReroll) && this.game.rerollOffers()) sound.click();
+        return; // stays in the shop
+      case "skip":
+        if (hit(this.ui.shopSkip)) {
+          sound.click();
+          this.game.chooseUpgrade(null);
+          this.screen = "playing";
+        }
+        return;
     }
   }
 
   /**
-   * Advance auto-steps, then draw the instruction banner, Skip button, and the
-   * highlight ring(s) for the current beat. Called each frame from play/shop.
+   * Advance auto-steps, load the current beat's scene if needed, then draw the
+   * banner, Skip button, and highlight ring(s). Called each frame from play/shop.
    */
   private tutorialTick(): void {
     if (!this.tutorialActive) return;
     // Auto-advance past completed steps (play/evaluate/choice have predicates;
-    // the shop-explain beats have done:false and advance on tap instead).
+    // "explain" beats have done:false and advance on tap instead).
     while (this.tutorialStep < TUTORIAL_OUTRO && this.tutBeat().done) {
       this.tutorialStep += 1;
     }
-    const beat = this.tutBeat();
+    let beat = this.tutBeat();
+    // Load a new scripted round when we reach a beat that starts one.
+    if (beat.scene !== undefined && this.tutScene !== beat.scene) {
+      this.loadTutorialScene(beat.scene);
+      beat = this.tutBeat(); // recompute highlights against the fresh round
+    }
     if (beat.phase === "outro") {
       this.drawTutorialOutro();
       return;
@@ -864,15 +981,18 @@ export class App {
       const c = this.ui.nodeCircles.find((n) => n.id === beat.node);
       if (c) this.drawRingCircle(c.x, c.y, c.r, "#7CF29B");
     }
-    if (beat.highlight === "evaluate" && this.ui.evaluateBtn) this.drawRingRect(this.ui.evaluateBtn, "#7CF29B");
-    if (beat.highlight === "options") for (const o of this.ui.shopOptions) this.drawRingRect(o, "#8fe4ff");
-    if (beat.highlight === "actions") {
-      for (const rr of [this.ui.shopGrow, this.ui.shopReroll, this.ui.shopSkip]) {
-        if (rr) this.drawRingRect(rr, "#8fe4ff");
-      }
-    }
-    if (beat.highlight === "option0" && this.ui.shopOptions[0]) {
-      this.drawRingRect(this.ui.shopOptions[0], "#7CF29B");
+    const ringBtn = (r: Rect | undefined, color: string) => { if (r) this.drawRingRect(r, color); };
+    switch (beat.highlight) {
+      case "evaluate": ringBtn(this.ui.evaluateBtn, "#7CF29B"); break;
+      case "redraw": ringBtn(this.ui.redrawBtn, "#8fe4ff"); break;
+      case "grow": ringBtn(this.ui.shopGrow, "#7CF29B"); break;
+      case "reroll": ringBtn(this.ui.shopReroll, "#7CF29B"); break;
+      case "skip": ringBtn(this.ui.shopSkip, "#7CF29B"); break;
+      case "option0": ringBtn(this.ui.shopOptions[0], "#7CF29B"); break;
+      case "options": for (const o of this.ui.shopOptions) this.drawRingRect(o, "#8fe4ff"); break;
+      case "actions":
+        for (const rr of [this.ui.shopGrow, this.ui.shopReroll, this.ui.shopSkip]) ringBtn(rr, "#8fe4ff");
+        break;
     }
   }
 

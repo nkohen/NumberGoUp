@@ -265,6 +265,24 @@ export class Game {
     this.drawHand();
   }
 
+  /**
+   * Tutorial helper: begin a fully controlled round with a specific deck,
+   * target and depth cap (focus, round and stats are left untouched so they can
+   * carry across scripted rounds). Bypasses the normal target curve.
+   */
+  startScriptedRound(deck: Card[], target: number, depth: number): void {
+    this.deck = deck;
+    this.target = target;
+    this.currentDepth = depth;
+    this.phase = "playing";
+    this.tree = newTree();
+    this.roundDeck = this.rng.shuffle(this.deck);
+    this.hand = [];
+    this.turn = 0;
+    this.fishCount = 0;
+    this.drawHand();
+  }
+
   /** Shuffle the round deck and refill the hand up to `handSize`. */
   private drawHand(): void {
     // Return any leftover hand cards to the round deck first.
