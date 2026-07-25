@@ -677,7 +677,8 @@ export class App {
       "• Number cards (1,2…) fill empty 0-slots.",
       "• + and × cards split a number into (number ○ 0),",
       "   sprouting a fresh 0 to fill.",
-      "• Careful: × by an unfilled 0 zeroes the whole branch!",
+      "• An unfilled × bubble counts as 1 (a + bubble as 0),",
+      "   so fill them in to build the number up.",
       "• Re-draw your hand to fish for a card (e.g. a ×) —",
       "   free when stuck, else a small ◆ cost that rises.",
       `• The tree is ${depth} levels deep for now (up to ${2 ** depth} numbers) —`,
@@ -795,7 +796,7 @@ export class App {
     const ops = () => listNodes(g.root).filter((n) => n.type === "op").length;
     const shop = this.screen === "shop";
     switch (this.tutorialStep) {
-      // --- Round 1: numbers, ×, the ×0 trap, precision --------------------
+      // --- Round 1: numbers, ×, the empty-× = 1 rule, precision -----------
       case 0:
         return { phase: "play", done: g.root.type !== "slot", hand: numIdx(), node: slot(),
           text: "Goal: reach the target of 4.  Drag the highlighted 2 onto the glowing bubble." };
@@ -804,7 +805,7 @@ export class App {
           text: "Now multiply — drag the × card onto your 2." };
       case 2:
         return { phase: "play", done: g.currentScore >= g.target, hand: numIdx(), node: slot(),
-          text: "× by an empty 0 is 0! Drag the last 2 into the empty bubble." };
+          text: "An empty × bubble counts as 1 (2 × 1 = 2). Fill it with the last 2 → 2 × 2 = 4." };
       case 3:
         return { phase: "evaluate", done: shop, highlight: "evaluate",
           text: "2 × 2 = 4 — exactly the target! Tap the highlighted Evaluate ✓." };

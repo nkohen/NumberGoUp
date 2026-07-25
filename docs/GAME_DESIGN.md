@@ -26,9 +26,12 @@ puzzle: build the best tree you can from the cards you draw.
   downward from its leaves; the top operator is fixed once placed.
 
 ### Evaluation
-- `slot = 0`, `value(n) = n`, `+`/`×` combine their children.
-- **Multiplying by an unfilled `0` zeroes that whole branch** — the central
-  strategic hazard.
+- `value(n) = n`, `+`/`×` combine their children.
+- **An unfilled slot contributes its parent operator's identity: `0` under `+`,
+  but `1` under `×`** (its greyed bubble shows `1`). So an incomplete `×` branch
+  no longer zeroes the whole score — it just leaves that factor at 1. A bare/root
+  slot is still `0`. (Earlier builds zeroed on any empty `×`; that feel-bad
+  hazard was removed on the placement-preview branch.)
 
 ### The turn
 1. Shuffle deck, draw 5.
