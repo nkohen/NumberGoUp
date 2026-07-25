@@ -49,13 +49,25 @@ describe("tree placement & evaluation", () => {
       expect(root.left).toEqual({ id: 0, type: "value", value: 2 });
       expect(root.right.type).toBe("slot");
     }
-    // 2 * 0 === 0 until the slot is filled
-    expect(evaluate(res.tree.root)).toBe(0);
+    // [EXPERIMENT] An empty × factor is the identity 1, so 2 × (empty) === 2
+    // (rather than collapsing to 0) until the slot is filled.
+    expect(evaluate(res.tree.root)).toBe(2);
   });
 
   it("rejects an op onto a slot", () => {
     const t = newTree();
     expect(place(t, 0, opCard("+"))).toBeNull();
+  });
+
+  it("[experiment] empty slot = operator identity (1 under ×, 0 under +)", () => {
+    let t = newTree();
+    t = place(t, 0, numberCard(5))!.tree;
+    // 5 × (empty) === 5 (identity 1), not 0
+    expect(evaluate(place(t, 0, opCard("*"))!.tree.root)).toBe(5);
+    // 5 + (empty) === 5 (identity 0)
+    expect(evaluate(place(t, 0, opCard("+"))!.tree.root)).toBe(5);
+    // a bare/root slot is still 0
+    expect(evaluate(newTree().root)).toBe(0);
   });
 
   it("builds (2 + 1) * (2 + 1) = 9", () => {

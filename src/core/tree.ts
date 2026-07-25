@@ -56,7 +56,15 @@ export function newTree(): Tree {
 
 // --- Evaluation ---------------------------------------------------------------
 
-/** Evaluate a node. `xEnv` is the current binding of the variable `x`. */
+/**
+ * Evaluate a node. `xEnv` is the current binding of the variable `x`.
+ *
+ * [EXPERIMENT — placement-preview branch] An unfilled slot contributes its
+ * PARENT operator's identity element: 0 under `+` (unchanged) but **1 under `×`**
+ * (its greyed bubble shows "1"). This means an incomplete multiply branch no
+ * longer zeroes your whole score — it just leaves that factor at 1. A bare/root
+ * slot is still 0.
+ */
 export function evaluate(node: TreeNode, xEnv = 0): number {
   switch (node.type) {
     case "slot":
@@ -67,10 +75,17 @@ export function evaluate(node: TreeNode, xEnv = 0): number {
       return xEnv;
     case "op":
       switch (node.op) {
-        case "+":
-          return evaluate(node.left, xEnv) + evaluate(node.right, xEnv);
-        case "*":
-          return evaluate(node.left, xEnv) * evaluate(node.right, xEnv);
+        case "+": {
+          const l = node.left.type === "slot" ? 0 : evaluate(node.left, xEnv);
+          const r = node.right.type === "slot" ? 0 : evaluate(node.right, xEnv);
+          return l + r;
+        }
+        case "*": {
+          // Empty factor = 1, so an unfilled × branch doesn't collapse to 0.
+          const l = node.left.type === "slot" ? 1 : evaluate(node.left, xEnv);
+          const r = node.right.type === "slot" ? 1 : evaluate(node.right, xEnv);
+          return l * r;
+        }
         case "@":
           // Apply: evaluate the function (left) at the point given by the right.
           return evaluate(node.left, evaluate(node.right, xEnv));

@@ -228,6 +228,19 @@ export class Renderer {
     const circles = this.computeTreeCircles(root);
     this.lastNodeCircles = circles;
 
+    // [EXPERIMENT] Map each node to its parent operator, so an empty slot can
+    // show its parent's identity element (1 under ×, 0 under +) instead of 0.
+    const parentOp = new Map<NodeId, string>();
+    const mapParents = (n: TreeNode): void => {
+      if (n.type === "op") {
+        parentOp.set(n.left.id, n.op);
+        parentOp.set(n.right.id, n.op);
+        mapParents(n.left);
+        mapParents(n.right);
+      }
+    };
+    mapParents(root);
+
     // Ease animated bubble views toward targets; spawn new ones with a pop.
     const alive = new Set<NodeId>();
     for (const c of circles) {
@@ -268,6 +281,8 @@ export class Renderer {
       let r = bv.r * pop;
       let alpha = 1;
       let label = this.labelFor(c.node);
+      // An empty × factor reads as "1" (its identity); + slots stay "0".
+      if (c.node.type === "slot" && parentOp.get(c.id) === "*") label = "1";
       let showValue = false;
 
       if (opts.evalAnim) {

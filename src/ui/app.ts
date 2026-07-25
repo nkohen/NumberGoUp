@@ -1152,8 +1152,9 @@ export class App {
 
   /**
    * [EXPERIMENT] Floating chip near the hovered target bubble showing what the
-   * whole tree would score if the dragged card landed there, plus the resulting
-   * precision grade (or a red "miss" warning if it would leave you under target).
+   * whole tree would score if the dragged card landed there. The chip's border
+   * is tinted by the precision grade (green→red), but shows NO words — being
+   * under target mid-build is normal, so a "miss" label would read as an error.
    */
   private drawPlacementPreview(): void {
     if (!this.drag || this.hoverNodeId === null) return;
@@ -1161,26 +1162,19 @@ export class App {
     const res = place(g.tree, this.hoverNodeId, this.drag.card, g.currentDepth);
     if (!res) return;
     const score = evaluate(res.tree.root);
-    const { grade, focusEarned, won } = gradeLand(score, g.target, g.cfg.precisionModel);
+    const { grade, won } = gradeLand(score, g.target, g.cfg.precisionModel);
     const circle = this.ui.nodeCircles.find((c) => c.id === this.hoverNodeId);
     if (!circle) return;
 
     const r = this.renderer;
     const ctx = r.ctx;
-    const overPct = g.target > 0 ? Math.round(((score - g.target) / g.target) * 100) : 0;
-    const line1 = `→ ${score.toLocaleString()}`;
-    const line2 = won
-      ? `${grade}  +${focusEarned} ◆  (${overPct >= 0 ? "+" : ""}${overPct}%)`
-      : `UNDER TARGET — would miss`;
+    const label = `→ ${score.toLocaleString()}`;
     const color = won ? gradeColor(grade) : "#ff6b8a";
 
     ctx.save();
-    ctx.font = "800 15px sans-serif";
-    const w1 = ctx.measureText(line1).width;
-    ctx.font = "700 13px sans-serif";
-    const w2 = ctx.measureText(line2).width;
-    const cw = Math.max(w1, w2) + 26;
-    const ch = 48;
+    ctx.font = "800 16px sans-serif";
+    const cw = ctx.measureText(label).width + 26;
+    const ch = 32;
     let bx = circle.x - cw / 2;
     let by = circle.y - circle.r - ch - 12;
     bx = Math.max(8, Math.min(r.width - cw - 8, bx));
@@ -1198,8 +1192,7 @@ export class App {
     ctx.stroke();
     ctx.restore();
 
-    r.text(line1, bx + cw / 2, by + 17, { size: 15, weight: 800 });
-    r.text(line2, bx + cw / 2, by + 36, { size: 13, weight: 700, color });
+    r.text(label, bx + cw / 2, by + ch / 2 + 1, { size: 16, weight: 800, color });
   }
 
   private layoutPlayControls(): void {
