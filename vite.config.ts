@@ -1,4 +1,5 @@
 import { defineConfig, type Plugin } from "vite";
+import { VitePWA } from "vite-plugin-pwa";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -61,7 +62,62 @@ function devLogPlugin(): Plugin {
 // opened directly. The `test` block configures Vitest for the core logic.
 export default defineConfig({
   base: "./",
-  plugins: [devLogPlugin()],
+  plugins: [
+    devLogPlugin(),
+    // Installable, offline-capable PWA. `registerType: "prompt"` means a new
+    // deploy does NOT silently swap under the player — instead the app surfaces
+    // an explicit "update available" prompt (see src/pwa.ts) and only reloads
+    // when they accept. The service worker precaches the built bundle, and the
+    // Google Fonts (Baloo 2) are runtime-cached so the app keeps its look
+    // offline after the first online launch.
+    VitePWA({
+      registerType: "prompt",
+      includeAssets: ["apple-touch-icon.png"],
+      manifest: {
+        name: "Number Go Up",
+        short_name: "NGU",
+        description:
+          "A minimalist roguelike deck-building game. Build an arithmetic tree, make the number go up.",
+        theme_color: "#0b1026",
+        background_color: "#0b1026",
+        display: "standalone",
+        orientation: "portrait",
+        icons: [
+          { src: "icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
+          { src: "icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
+          {
+            src: "icon-512-maskable.png",
+            sizes: "512x512",
+            type: "image/png",
+            purpose: "maskable",
+          },
+        ],
+      },
+      workbox: {
+        globPatterns: ["**/*.{js,css,html,png,svg,ico,woff2}"],
+        runtimeCaching: [
+          {
+            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
+            handler: "CacheFirst",
+            options: {
+              cacheName: "google-fonts-stylesheets",
+              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
+            },
+          },
+          {
+            urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
+            handler: "CacheFirst",
+            options: {
+              cacheName: "google-fonts-webfonts",
+              cacheableResponse: { statuses: [0, 200] },
+              expiration: { maxEntries: 20, maxAgeSeconds: 60 * 60 * 24 * 365 },
+            },
+          },
+        ],
+      },
+      devOptions: { enabled: false },
+    }),
+  ],
   build: {
     target: "es2020",
     outDir: "dist",

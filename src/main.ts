@@ -4,6 +4,7 @@
 import "./style.css";
 import { App } from "./ui/app";
 import type { GameConfig } from "./core/game";
+import { initPWA } from "./pwa";
 
 const canvas = document.getElementById("game") as HTMLCanvasElement | null;
 if (!canvas) {
@@ -38,3 +39,6 @@ const app = new App(canvas, opts);
 if (import.meta.env.DEV) {
   (window as unknown as { __app: App }).__app = app;
 }
+
+// Register the service worker and wire the update prompt (no-op in dev).
+initPWA();
