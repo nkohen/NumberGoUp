@@ -8,6 +8,9 @@ dist/
 # Dev-only gameplay logs (written by the vite devLog plugin)
 dev-logs/
 
+# Generated screenshots from `npm run screenshots`
+screenshots/
+
 # Rust prototype (archived under legacy-rust/)
 /legacy-rust/target/
 /target/

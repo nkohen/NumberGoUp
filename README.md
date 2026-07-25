@@ -29,10 +29,18 @@ npm run dev       # open the printed localhost URL
 Other scripts:
 
 ```bash
-npm run build     # type-check + production build into dist/
-npm run preview   # serve the production build
-npm test          # run the core-logic unit tests (Vitest)
+npm run build       # type-check + production build into dist/
+npm run preview     # serve the production build
+npm test            # run the core-logic unit tests (Vitest)
+npm run screenshots # capture every screen at mobile + desktop for a visual check
+npm run deploy      # build + publish the web version to nkohen.github.io
 ```
+
+Because the whole UI is drawn on a canvas, unit tests can't catch layout
+regressions. Before publishing a rendering/layout change, run `npm run
+screenshots` and eyeball the results — see
+[`docs/visual-testing.md`](docs/visual-testing.md) for what to check (and the
+one iOS case that needs a real device).
 
 The production build in `dist/` is a fully static bundle — host it anywhere
 (GitHub Pages, Netlify, an S3 bucket) or just open it. It's ~12 KB gzipped with
