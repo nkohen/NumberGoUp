@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Game, DEFAULT_CONFIG, targetForRound, gradeLand, costToGrow, MAX_DEPTH } from "../src/core/game";
 import { applyUpgrade, generateOffers } from "../src/core/upgrades";
-import { starterDeck, numberCard, cardKey } from "../src/core/cards";
+import { starterDeck, numberCard, opCard, cardKey } from "../src/core/cards";
 import { Rng } from "../src/core/rng";
 import { evaluate, legalTargets } from "../src/core/tree";
 
@@ -304,5 +304,32 @@ describe("integration: a legal target always exists after any real play", () => 
     }
     // Tree should evaluate to a finite number.
     expect(Number.isFinite(evaluate(g.root))).toBe(true);
+  });
+});
+
+describe("canProgress (auto-resolve support)", () => {
+  it("is true at the start of a round (empty tree accepts a number)", () => {
+    const g = new Game(DEFAULT_CONFIG, 42);
+    g.startRun();
+    expect(g.canProgress()).toBe(true);
+  });
+
+  it("is false when the tree has no slot and only numbers remain in the pool", () => {
+    const g = new Game(DEFAULT_CONFIG, 7);
+    g.startRun();
+    // A completed single-leaf tree: no empty slot for a number to fill.
+    g.tree = { root: { id: 0, type: "value", value: 5 }, nextId: 1 };
+    g.hand = [numberCard(1), numberCard(2)];
+    g.roundDeck = [numberCard(1)];
+    expect(g.canProgress()).toBe(false);
+  });
+
+  it("is true if an operator remains anywhere in the pool to split a leaf", () => {
+    const g = new Game(DEFAULT_CONFIG, 7);
+    g.startRun();
+    g.tree = { root: { id: 0, type: "value", value: 5 }, nextId: 1 };
+    g.hand = [numberCard(1)];
+    g.roundDeck = [opCard("+")]; // an op can split the value leaf → progress
+    expect(g.canProgress()).toBe(true);
   });
 });

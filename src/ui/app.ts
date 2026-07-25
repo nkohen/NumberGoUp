@@ -464,6 +464,7 @@ export class App {
           150,
         );
         this.autosave();
+        this.maybeAutoResolve();
       } else {
         // Landed on a node but the game rejected the placement.
         devLog("play_failed", {
@@ -651,12 +652,14 @@ export class App {
     return counts;
   }
 
-  private beginEvaluate(): void {
+  private beginEvaluate(auto = false): void {
     if (this.screen !== "playing") return;
     // In the tutorial you can't lose to an early evaluate — ignore it until the
     // scripted tree actually reaches the target.
     if (this.tutorialActive && this.game.currentScore < this.game.target) return;
-    sound.click();
+    // Auto-resolves aren't a button press, so no click blip (the drop sound
+    // already fired, and win/lose chimes play when the merge finishes).
+    if (!auto) sound.click();
     this.evalAnim = new EvaluateAnimation(this.game.root);
     const tree = treeToString(this.game.root);
     const depth = treeHeight(this.game.root);
@@ -691,6 +694,26 @@ export class App {
       });
     }
     this.screen = "evaluating";
+  }
+
+  /**
+   * After any board change, resolve the round automatically instead of making
+   * the player click:
+   *  - **Target reached** → auto-evaluate. Precision means any further play only
+   *    overshoots, so stopping the instant you clear is the optimal land.
+   *  - **No legal move left** anywhere in the remaining pool (re-draws included)
+   *    → auto-evaluate too. The tree can't grow, so the run ends here; the
+   *    existing evaluate→game-over animation plays without a forced click.
+   */
+  private maybeAutoResolve(): void {
+    if (this.screen !== "playing" || this.tutorialActive || this.evalAnim) return;
+    const g = this.game;
+    if (g.currentScore >= g.target) {
+      this.beginEvaluate(true);
+    } else if (!g.canProgress()) {
+      this.flash("No legal moves left — evaluating…");
+      this.beginEvaluate(true);
+    }
   }
 
   private toggleMute(): void {
@@ -1461,11 +1484,13 @@ export class App {
   private drawHintMaybe(): void {
     if (!this.hintShown || this.game.round !== 1) return;
     const r = this.renderer;
+    // Sit above the bottom button row (?, Deck, Save) so the centered hint never
+    // collides with them on narrow mobile widths.
     r.text(
       "Drag a card onto a glowing bubble ✨",
       r.width / 2,
-      this.renderer.height - this.renderer.handHeight - 22,
-      { size: 16, color: "rgba(124,242,155,0.9)" },
+      this.renderer.height - this.renderer.handHeight - 66,
+      { size: 16, color: "rgba(124,242,155,0.9)", maxWidth: r.width - 24 },
     );
   }
 

@@ -303,6 +303,21 @@ export class Game {
     );
   }
 
+  /**
+   * True if ANY remaining card — in hand OR still in the round deck — has a
+   * legal placement on the current tree. A re-draw only reshuffles this same
+   * pool, so when this is false no sequence of re-draws can ever produce a move:
+   * the round genuinely can't progress (e.g. every slot is filled and no
+   * operators remain to split a leaf), and there's no point making the player
+   * burn re-draws before the run resolves.
+   */
+  canProgress(): boolean {
+    return (
+      this.hand.some((c) => hasLegalTarget(this.tree.root, c, this.currentDepth)) ||
+      this.roundDeck.some((c) => hasLegalTarget(this.tree.root, c, this.currentDepth))
+    );
+  }
+
   /** True when the round can no longer progress by playing (deck & hand spent). */
   get isHandEmpty(): boolean {
     return this.hand.length === 0;
