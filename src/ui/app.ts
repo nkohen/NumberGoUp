@@ -25,6 +25,25 @@ import { devLog } from "../dev/devlog";
 
 type Screen = "title" | "playing" | "evaluating" | "shop" | "gameover";
 
+/** A single scripted beat of the interactive tutorial. */
+type TutPhase = "play" | "evaluate" | "shop-explain" | "shop-choice" | "outro";
+interface TutBeat {
+  phase: TutPhase;
+  text: string;
+  /** Auto-advance predicate (used by play / evaluate / shop-choice beats). */
+  done: boolean;
+  /** Hand-card index to highlight & allow (play beats). */
+  hand?: number;
+  /** Tree-node id to highlight as the drop target (play beats). */
+  node?: number;
+  /** A UI region to ring: the Evaluate button, shop options, etc. */
+  highlight?: "evaluate" | "options" | "actions" | "option0";
+}
+/** Fixed seed so the tutorial's hand order & shop offers are deterministic. */
+const TUTORIAL_SEED = 42;
+/** Step index of the terminal outro beat. */
+const TUTORIAL_OUTRO = 7;
+
 interface DragState {
   handIndex: number;
   card: Card;
@@ -160,28 +179,11 @@ export class App {
       return;
     }
 
-    // Interactive tutorial input takes priority whenever it's running.
+    // The interactive tutorial fully controls input while it runs — every
+    // action is scripted, so nothing falls through to the normal handlers.
     if (this.tutorialActive) {
-      if (this.tutorialStep >= 5) {
-        // Outro: Play a real run, or back to title.
-        if (this.ui.tutNext && pointInRect(x, y, this.ui.tutNext)) {
-          sound.click();
-          this.tutorialActive = false;
-          this.tutorialStep = 0;
-          this.startRun("classic");
-        } else if (this.ui.tutBack && pointInRect(x, y, this.ui.tutBack)) {
-          sound.click();
-          this.endTutorial();
-        }
-        return;
-      }
-      // "Skip tutorial" is available throughout; other clicks fall through to
-      // the normal play/shop handlers so the player can actually do the steps.
-      if (this.ui.tutSkip && pointInRect(x, y, this.ui.tutSkip)) {
-        sound.click();
-        this.endTutorial();
-        return;
-      }
+      this.onTutorialPointerDown(x, y);
+      return;
     }
 
     switch (this.screen) {
@@ -722,12 +724,17 @@ export class App {
 
   // --- interactive tutorial ---------------------------------------------------
 
-  /** Begin the guided tutorial on a tiny scripted deck (2, 2, ×) → target 4. */
+  /**
+   * Begin the guided tutorial: a tiny scripted deck (2, 2, ×) → target 4 on a
+   * FIXED seed so the hand order and shop offers are deterministic and can be
+   * scripted. Every action is highlighted and locked; the player just follows.
+   */
   private startTutorial(): void {
-    this.game = new Game(configForMode("classic"));
+    this.game = new Game(configForMode("classic"), TUTORIAL_SEED);
     this.game.startRun([numberCard(2), numberCard(2), opCard("*")]);
     this.tutorialActive = true;
     this.tutorialStep = 0;
+    this.drag = null;
     this.screen = "playing";
     this.hintShown = false;
   }
@@ -735,73 +742,183 @@ export class App {
   private endTutorial(): void {
     this.tutorialActive = false;
     this.tutorialStep = 0;
+    this.drag = null;
     this.showHelp = false;
     this.showDeck = false;
     this.screen = "title";
   }
 
-  /** Instruction + completion predicate for a guided step. */
-  private tutorialStepInfo(step: number): { text: string; done: boolean } {
+  /** Descriptor for the current scripted beat (text, what to highlight, gate). */
+  private tutBeat(): TutBeat {
     const g = this.game;
-    switch (step) {
+    const firstNumber = () => g.hand.findIndex((c) => c.kind === "number");
+    const firstOp = () => g.hand.findIndex((c) => c.kind === "op");
+    const slot = () => listNodes(g.root).find((n) => n.type === "slot")?.id;
+    const value = () => listNodes(g.root).find((n) => n.type === "value")?.id;
+    switch (this.tutorialStep) {
       case 0:
-        return {
-          text: "Goal: reach the target of 4.  Drag a 2 onto the glowing bubble.",
-          done: g.root.type !== "slot",
-        };
+        return { phase: "play", done: g.root.type !== "slot", hand: firstNumber(), node: slot(),
+          text: "Goal: reach the target of 4.  Drag the highlighted 2 onto the glowing bubble." };
       case 1:
-        return {
-          text: "Now multiply — drag the × card onto your 2.",
-          done: g.root.type === "op",
-        };
+        return { phase: "play", done: g.root.type === "op", hand: firstOp(), node: value(),
+          text: "Now multiply — drag the × card onto your 2." };
       case 2:
-        return {
-          text: "See it? × by an empty (0) bubble is 0. Drag the last 2 into it.",
-          done: g.currentScore >= g.target,
-        };
+        return { phase: "play", done: g.currentScore >= g.target, hand: firstNumber(), node: slot(),
+          text: "See it? × by an empty 0 is 0. Drag the last 2 into the empty bubble." };
       case 3:
-        return {
-          text: "2 × 2 = 4 — exactly the target! Press Evaluate ✓ (top right).",
-          done: this.screen === "shop",
-        };
+        return { phase: "evaluate", done: this.screen === "shop", highlight: "evaluate",
+          text: "2 × 2 = 4 — exactly the target! Tap the highlighted Evaluate ✓." };
       case 4:
-        return {
-          text: "Cleared! An exact landing banked +5 ◆ focus. Take an upgrade or Skip ◆ to continue.",
-          done: g.round >= 2,
-        };
+        return { phase: "shop-explain", done: false, highlight: "options",
+          text: "Cleared! An exact landing banked +5 ◆ focus. These are upgrade choices — tap anywhere to continue." };
+      case 5:
+        return { phase: "shop-explain", done: false, highlight: "actions",
+          text: "You can also spend ◆ focus: Grow the tree, Re-roll offers, or Skip (+1 ◆). Tap to continue." };
+      case 6:
+        return { phase: "shop-choice", done: g.round >= 2, highlight: "option0",
+          text: "For the tutorial, tap the highlighted upgrade to finish." };
       default:
-        return { text: "", done: true };
+        return { phase: "outro", done: true, text: "" };
+    }
+  }
+
+  /** All tutorial input — fully scripted; nothing reaches the normal handlers. */
+  private onTutorialPointerDown(x: number, y: number): void {
+    const beat = this.tutBeat();
+    if (beat.phase === "outro") {
+      if (this.ui.tutNext && pointInRect(x, y, this.ui.tutNext)) {
+        sound.click();
+        this.tutorialActive = false;
+        this.tutorialStep = 0;
+        this.startRun("classic");
+      } else if (this.ui.tutBack && pointInRect(x, y, this.ui.tutBack)) {
+        sound.click();
+        this.endTutorial();
+      }
+      return;
+    }
+    // Skip is always available during the guided steps.
+    if (this.ui.tutSkip && pointInRect(x, y, this.ui.tutSkip)) {
+      sound.click();
+      this.endTutorial();
+      return;
+    }
+    switch (beat.phase) {
+      case "play": {
+        // Only the highlighted hand card can be picked up.
+        if (beat.hand === undefined || beat.hand < 0) return;
+        const hr = this.ui.handRects.find((h) => h.index === beat.hand);
+        if (hr && pointInRect(x, y, hr)) {
+          this.hintShown = false;
+          this.drag = { handIndex: hr.index, card: hr.card, x, y, startX: x, startY: y, moved: false };
+          this.legalNow = new Set(legalTargets(this.game.root, hr.card, this.game.currentDepth));
+          sound.pickup();
+        }
+        return;
+      }
+      case "evaluate":
+        if (this.ui.evaluateBtn && pointInRect(x, y, this.ui.evaluateBtn)) this.beginEvaluate();
+        return;
+      case "shop-explain":
+        // Buttons are locked; any tap advances the explanation.
+        sound.click();
+        this.tutorialStep += 1;
+        return;
+      case "shop-choice": {
+        // Only the scripted (first) upgrade is clickable.
+        const opt = this.ui.shopOptions[0];
+        if (opt && pointInRect(x, y, opt)) {
+          sound.upgrade();
+          this.game.chooseUpgrade(0);
+        }
+        return;
+      }
     }
   }
 
   /**
-   * Advance guided steps and draw the current instruction banner + Skip button.
-   * Called each frame from the playing and shop screens while the tutorial runs.
+   * Advance auto-steps, then draw the instruction banner, Skip button, and the
+   * highlight ring(s) for the current beat. Called each frame from play/shop.
    */
   private tutorialTick(): void {
     if (!this.tutorialActive) return;
-    // Advance past any completed steps (predicates are monotonic per step).
-    while (this.tutorialStep < 5 && this.tutorialStepInfo(this.tutorialStep).done) {
+    // Auto-advance past completed steps (play/evaluate/choice have predicates;
+    // the shop-explain beats have done:false and advance on tap instead).
+    while (this.tutorialStep < TUTORIAL_OUTRO && this.tutBeat().done) {
       this.tutorialStep += 1;
     }
-    if (this.tutorialStep >= 5) {
+    const beat = this.tutBeat();
+    if (beat.phase === "outro") {
       this.drawTutorialOutro();
       return;
     }
-    this.drawTutorialBanner(this.tutorialStepInfo(this.tutorialStep).text);
+    this.drawTutorialBanner(beat.text);
     this.drawTutorialSkip();
+
+    // Highlights.
+    if (beat.hand !== undefined && beat.hand >= 0) {
+      const hr = this.ui.handRects.find((h) => h.index === beat.hand);
+      if (hr) this.drawRingRect(hr, "#7CF29B");
+    }
+    if (beat.node !== undefined) {
+      const c = this.ui.nodeCircles.find((n) => n.id === beat.node);
+      if (c) this.drawRingCircle(c.x, c.y, c.r, "#7CF29B");
+    }
+    if (beat.highlight === "evaluate" && this.ui.evaluateBtn) this.drawRingRect(this.ui.evaluateBtn, "#7CF29B");
+    if (beat.highlight === "options") for (const o of this.ui.shopOptions) this.drawRingRect(o, "#8fe4ff");
+    if (beat.highlight === "actions") {
+      for (const rr of [this.ui.shopGrow, this.ui.shopReroll, this.ui.shopSkip]) {
+        if (rr) this.drawRingRect(rr, "#8fe4ff");
+      }
+    }
+    if (beat.highlight === "option0" && this.ui.shopOptions[0]) {
+      this.drawRingRect(this.ui.shopOptions[0], "#7CF29B");
+    }
+  }
+
+  /** A pulsing highlight ring around a rectangle (button / card / option). */
+  private drawRingRect(rect: Rect, color: string): void {
+    const ctx = this.renderer.ctx;
+    const pulse = 0.55 + 0.45 * Math.sin(this.time * 5);
+    const p = 4;
+    ctx.save();
+    ctx.globalAlpha = pulse;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 16;
+    ctx.beginPath();
+    ctx.roundRect(rect.x - p, rect.y - p, rect.w + 2 * p, rect.h + 2 * p, 12);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /** A pulsing highlight ring around a tree bubble. */
+  private drawRingCircle(cx: number, cy: number, rad: number, color: string): void {
+    const ctx = this.renderer.ctx;
+    const pulse = 0.55 + 0.45 * Math.sin(this.time * 5);
+    ctx.save();
+    ctx.globalAlpha = pulse;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 16;
+    ctx.beginPath();
+    ctx.arc(cx, cy, rad + 7, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
   }
 
   private drawTutorialBanner(text: string): void {
     const r = this.renderer;
     const w = Math.min(560, r.width - 24);
-    const h = 52;
+    const h = 54;
     const x = (r.width - w) / 2;
     // Sit just below the top control row so it never covers the Evaluate button.
     const y = r.hudHeight + 58;
     const ctx = r.ctx;
     ctx.save();
-    ctx.fillStyle = "rgba(20,26,60,0.94)";
+    ctx.fillStyle = "rgba(20,26,60,0.96)";
     ctx.strokeStyle = "rgba(143,228,255,0.7)";
     ctx.lineWidth = 1.5;
     ctx.shadowColor = "rgba(0,0,0,0.5)";
@@ -936,11 +1053,16 @@ export class App {
       const label = cost > 0 ? `↻ Redraw  −${cost} ◆` : "↻ Redraw (free)";
       r.drawButton(this.ui.redrawBtn, label);
     }
-    if (this.ui.helpBtn) {
+    // Help / deck buttons are hidden during the tutorial to keep it focused.
+    if (this.ui.helpBtn && !this.tutorialActive) {
       r.drawButton(this.ui.helpBtn, "?");
+    } else {
+      this.ui.helpBtn = undefined;
     }
-    if (this.ui.deckBtn) {
+    if (this.ui.deckBtn && !this.tutorialActive) {
       r.drawButton(this.ui.deckBtn, "🃏 Deck");
+    } else {
+      this.ui.deckBtn = undefined;
     }
     if (this.showHelp) this.drawRulesPanel();
     if (this.showDeck) this.drawDeckPanel();
