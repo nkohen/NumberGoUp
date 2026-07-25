@@ -7,7 +7,7 @@
  *   playing    → drag cards onto glowing bubbles; Evaluate to finalize
  *   evaluating → the merge animation plays out, then routes to shop/gameover
  *   shop       → pick one of three deck upgrades (or skip)
- *   gameover   → run summary + restart
+ *   gameover   → run summary; only exit is back to the title
  */
 import { Game, GameConfig, GameMode, LandGrade, gradeLand, configForMode, targetForRound, MAX_DEPTH, WIN_ROUND } from "../core/game";
 import { VictoryBubbles } from "./victory";
@@ -208,7 +208,11 @@ export class App {
     // run, so evaluating is deliberately click-only.
     if (e.key === "Enter" || e.key === " ") {
       if (this.screen === "title") this.startRun("classic");
-      else if (this.screen === "gameover") this.restart();
+      else if (this.screen === "gameover") {
+        // A loss sends you back to the title — there is no play-again shortcut.
+        this.localSave = loadLocal();
+        this.screen = "title";
+      }
     }
     if (e.key === "m") this.toggleMute();
   };
@@ -266,10 +270,7 @@ export class App {
         this.onShopPointerDown(x, y);
         return;
       case "gameover":
-        if (this.ui.restartBtn && pointInRect(x, y, this.ui.restartBtn)) {
-          sound.click();
-          this.restart();
-        } else if (this.ui.backToTitle && pointInRect(x, y, this.ui.backToTitle)) {
+        if (this.ui.backToTitle && pointInRect(x, y, this.ui.backToTitle)) {
           sound.click();
           this.localSave = loadLocal();
           this.screen = "title";
@@ -1925,11 +1926,10 @@ export class App {
       color: "rgba(234,240,255,0.75)",
     });
 
-    const restart: Rect = { x: r.width / 2 - 110, y: panel.y + h - 96, w: 220, h: 52 };
-    r.drawButton(restart, "↻  Play again", { primary: true, time: this.time });
-    this.ui.restartBtn = restart;
-    const back: Rect = { x: r.width / 2 - 110, y: panel.y + h - 36, w: 220, h: 30 };
-    r.drawButton(back, "Back to title");
+    // A loss ends the run — the only way forward is back to the title screen.
+    this.ui.restartBtn = undefined;
+    const back: Rect = { x: r.width / 2 - 110, y: panel.y + h - 72, w: 220, h: 52 };
+    r.drawButton(back, "Back to title", { primary: true, time: this.time });
     this.ui.backToTitle = back;
 
     const { muteRect } = this.peekMute();
