@@ -21,3 +21,6 @@ screenshots/
 
 # Temporary verification scripts (not part of the game)
 _*.mjs
+
+# Claude Code agent worktrees
+.claude/worktrees/
