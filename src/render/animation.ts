@@ -9,12 +9,22 @@ import { nodeHeights, parentMap } from "./layout";
  * Fill `map` with each node's evaluated value, threading the variable
  * environment `xEnv` through `@` (apply) nodes exactly like `evaluate` does.
  * Returns this node's value.
+ *
+ * `slotIdentity` is what a BARE slot contributes in this position — matching
+ * `evaluate`, an unfilled slot is its parent operator's identity: `0` under `+`
+ * (and at the root / under `@`) but **1 under `×`**, so an incomplete × branch
+ * reveals its greyed "1" and multiplies correctly instead of collapsing to 0.
  */
-function computeValues(node: TreeNode, xEnv: number, map: Map<NodeId, number>): number {
+function computeValues(
+  node: TreeNode,
+  xEnv: number,
+  map: Map<NodeId, number>,
+  slotIdentity = 0,
+): number {
   let v: number;
   switch (node.type) {
     case "slot":
-      v = 0;
+      v = slotIdentity;
       break;
     case "value":
       v = node.value;
@@ -24,11 +34,12 @@ function computeValues(node: TreeNode, xEnv: number, map: Map<NodeId, number>): 
       break;
     case "op": {
       if (node.op === "@") {
-        const arg = computeValues(node.right, xEnv, map);
-        v = computeValues(node.left, arg, map); // function evaluated at `arg`
+        const arg = computeValues(node.right, xEnv, map, 0);
+        v = computeValues(node.left, arg, map, 0); // function evaluated at `arg`
       } else {
-        const l = computeValues(node.left, xEnv, map);
-        const r = computeValues(node.right, xEnv, map);
+        const id = node.op === "*" ? 1 : 0;
+        const l = computeValues(node.left, xEnv, map, id);
+        const r = computeValues(node.right, xEnv, map, id);
         v = node.op === "+" ? l + r : l * r;
       }
       break;

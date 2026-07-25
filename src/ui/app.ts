@@ -29,6 +29,7 @@ import {
   loadLocal,
   clearLocal,
   writeBoundFile,
+  clearBoundFile,
   bindAndSaveFile,
   hasBoundFile,
   canBindFile,
@@ -608,13 +609,14 @@ export class App {
 
   /** Title-screen "Load from file": pick a save file and resume it. */
   private async loadFromFile(): Promise<void> {
+    // Start the picker FIRST, synchronously within the tap's user gesture, THEN
+    // play the click sound — otherwise the browser rejects the first attempt
+    // (the "have to tap Load twice" bug).
+    const pending = openSaveFile();
     sound.click();
-    const data = await openSaveFile();
-    if (data) {
-      this.resumeFrom(data);
-    } else {
-      this.flash("Couldn't load that file");
-    }
+    const res = await pending;
+    if (res.data) this.resumeFrom(res.data);
+    else if (!res.cancelled) this.flash("Couldn't load that file");
   }
 
   private logRunStart(cause: "new" | "restart"): void {
@@ -1354,8 +1356,6 @@ export class App {
     if (!res) return;
     const score = evaluate(res.tree.root);
     const { grade, won } = gradeLand(score, g.target, g.cfg.precisionModel);
-    const circle = this.ui.nodeCircles.find((c) => c.id === this.hoverNodeId);
-    if (!circle) return;
 
     const r = this.renderer;
     const ctx = r.ctx;
@@ -1366,8 +1366,13 @@ export class App {
     ctx.font = "800 16px sans-serif";
     const cw = ctx.measureText(label).width + 26;
     const ch = 32;
-    let bx = circle.x - cw / 2;
-    let by = circle.y - circle.r - ch - 12;
+    // Anchor to the CARD the player is holding, not the target bubble: on a big
+    // tree the hovered bubble ends up hidden under the dragged card. Float the
+    // chip just above the card (or below it near the top of the screen).
+    const cardH = Math.min(r.handHeight * 0.72, 120) * 1.1;
+    let bx = this.drag.x - cw / 2;
+    let by = this.drag.y - 10 - cardH / 2 - ch - 12;
+    if (by < r.hudHeight + 6) by = this.drag.y - 10 + cardH / 2 + 12;
     bx = Math.max(8, Math.min(r.width - cw - 8, bx));
     by = Math.max(r.hudHeight + 6, by);
 
@@ -1541,8 +1546,10 @@ export class App {
       } else {
         sound.lose();
         this.screen = "gameover";
-        // The run is over — drop the autosave so "Continue" only offers live runs.
+        // The run is over — drop the autosave (and empty the bound save file) so
+        // a dead run can't be continued or re-loaded.
         clearLocal();
+        void clearBoundFile();
         this.localSave = null;
       }
     }

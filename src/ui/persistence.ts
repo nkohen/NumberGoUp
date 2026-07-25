@@ -109,7 +109,10 @@ export function canBindFile(): boolean {
   return typeof window !== "undefined" && typeof (window as WinWithFS).showSaveFilePicker === "function";
 }
 
-const FILE_TYPES = [{ description: "Number Go Up save", accept: { "application/json": [".json", ".ngu.json"] } }];
+// NB: the File System Access picker rejects multi-dot extensions like
+// ".ngu.json" (throws "contains invalid characters"), so the accept filter uses
+// the plain ".json" our filenames end in. The <input> fallback is more lenient.
+const FILE_TYPES = [{ description: "Number Go Up save", accept: { "application/json": [".json"] } }];
 
 /** The bound save-file handle, kept in memory for the session once chosen. */
 let boundHandle: FSFileHandle | null = null;
@@ -153,6 +156,24 @@ export async function writeBoundFile(data: SaveData): Promise<void> {
   }
 }
 
+/**
+ * "Delete" the bound save by emptying it (a payload with no run), then unbind.
+ * Called when a run ends so a lost run can't be resurrected by re-loading the
+ * file. The file itself can't be removed via this API, but an empty payload
+ * fails validation on load, so it reads as "no save".
+ */
+export async function clearBoundFile(): Promise<void> {
+  if (!boundHandle) return;
+  try {
+    const writable = await boundHandle.createWritable();
+    await writable.write(JSON.stringify({ v: SAVE_VERSION, ts: Date.now(), game: null }));
+    await writable.close();
+  } catch {
+    /* best-effort */
+  }
+  boundHandle = null;
+}
+
 // --- Fallback download / upload (all browsers) ------------------------------
 
 /** Trigger a plain download of the save file (fallback when no file binding). */
@@ -168,41 +189,65 @@ export function downloadSave(data: SaveData): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** Outcome of a load attempt — distinguishes a real failure from a cancel. */
+export type LoadResult =
+  | { data: SaveData }
+  | { data: null; cancelled: boolean };
+
 /**
  * Let the player choose a save file to load. Uses the File System Access open
  * picker when available (and binds the chosen file for future autosaves),
- * otherwise a hidden <input type=file>. Resolves to the parsed save or null.
+ * otherwise a hidden <input type=file>. Returns the parsed save, or a null
+ * result flagged `cancelled` when the user just dismissed the picker (so the UI
+ * can stay quiet) vs. a genuine bad/empty file (so it can warn).
+ *
+ * IMPORTANT: this must be invoked synchronously from the click handler — the
+ * picker call has to happen inside the user gesture, or the first attempt is
+ * rejected (the "have to tap twice" bug).
  */
-export async function openSaveFile(): Promise<SaveData | null> {
+export async function openSaveFile(): Promise<LoadResult> {
   const w = window as WinWithFS;
   if (w.showOpenFilePicker) {
+    let handle: FSFileHandle;
     try {
-      const [handle] = await w.showOpenFilePicker({ types: FILE_TYPES, multiple: false });
+      [handle] = await w.showOpenFilePicker({ types: FILE_TYPES, multiple: false });
+    } catch {
+      return { data: null, cancelled: true }; // user dismissed the picker
+    }
+    try {
       const file = await handle.getFile();
       const data = JSON.parse(await file.text());
-      if (!isValidSave(data)) return null;
+      if (!isValidSave(data)) return { data: null, cancelled: false };
       boundHandle = handle; // continue auto-saving to the file we just loaded
-      return data;
+      return { data };
     } catch {
-      return null;
+      return { data: null, cancelled: false }; // unreadable / not JSON
     }
   }
-  // Fallback: hidden file input.
-  return new Promise<SaveData | null>((resolve) => {
+  // Fallback: a hidden file input. It must be attached to the DOM for the
+  // change event to fire reliably in some browsers (Safari), which is another
+  // cause of the "first tap does nothing" symptom.
+  return new Promise<LoadResult>((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = ".json,.ngu.json,application/json";
+    input.style.display = "none";
+    document.body.appendChild(input);
+    const done = (r: LoadResult) => {
+      input.remove();
+      resolve(r);
+    };
     input.onchange = async () => {
       const file = input.files?.[0];
-      if (!file) return resolve(null);
+      if (!file) return done({ data: null, cancelled: true });
       try {
         const data = JSON.parse(await file.text());
-        resolve(isValidSave(data) ? data : null);
+        done(isValidSave(data) ? { data } : { data: null, cancelled: false });
       } catch {
-        resolve(null);
+        done({ data: null, cancelled: false });
       }
     };
-    input.oncancel = () => resolve(null);
+    input.oncancel = () => done({ data: null, cancelled: true });
     input.click();
   });
 }
