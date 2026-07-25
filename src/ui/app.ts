@@ -15,6 +15,7 @@ import { Card, cardLabel, numberCard, opCard } from "../core/cards";
 import type { Upgrade } from "../core/upgrades";
 import { NodeId, legalTargets, hasLegalTarget, listNodes, treeToString, treeHeight, place, evaluate } from "../core/tree";
 import { sound } from "../audio/sound";
+import { haptics } from "../audio/haptics";
 import {
   Renderer,
   Rect,
@@ -159,9 +160,12 @@ export class App {
     // A placeholder game until the player picks a mode on the title screen.
     this.game = this.makeGame("classic");
 
-    // Restore mute preference.
+    // Restore mute preference. Mute silences haptics too, so the existing mute
+    // button doubles as the off-switch for the clearing-animation buzz.
     try {
-      sound.setMuted(localStorage.getItem("ngu.muted") === "1");
+      const muted = localStorage.getItem("ngu.muted") === "1";
+      sound.setMuted(muted);
+      haptics.setEnabled(!muted);
     } catch {
       /* ignore */
     }
@@ -761,6 +765,7 @@ export class App {
 
   private toggleMute(): void {
     const m = sound.toggleMuted();
+    haptics.setEnabled(!m);
     try {
       localStorage.setItem("ngu.muted", m ? "1" : "0");
     } catch {
@@ -1621,9 +1626,10 @@ export class App {
     const g = this.game;
     if (this.evalAnim) {
       const fired = this.evalAnim.update(dt);
-      // Merge sound + particle burst per level as it collapses.
+      // Merge sound + haptic buzz + particle burst per level as it collapses.
       for (const level of fired) {
         sound.merge(level, level >= 2);
+        haptics.merge(level);
       }
       // Draw tree with merge animation.
       const circles = r.drawTree(g.root, dt, {
@@ -1660,6 +1666,7 @@ export class App {
       if (this.game.phase === "won") {
         // Beat the final round — win the run with a bubble celebration.
         sound.win();
+        haptics.victory();
         this.startVictory();
         this.screen = "won";
         clearLocal();
@@ -1667,6 +1674,7 @@ export class App {
         this.localSave = null;
       } else if (this.game.phase === "gameover") {
         sound.lose();
+        haptics.lose();
         this.screen = "gameover";
         // The run is over — drop the autosave (and empty the bound save file) so
         // a dead run can't be continued or re-loaded.
@@ -1675,6 +1683,7 @@ export class App {
         this.localSave = null;
       } else {
         sound.win();
+        haptics.win();
         this.screen = "shop";
         this.autosave();
       }
