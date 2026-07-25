@@ -488,4 +488,82 @@ export class Game {
   get root(): TreeNode {
     return this.tree.root;
   }
+
+  // --- save / load ------------------------------------------------------------
+
+  /**
+   * A complete, JSON-serializable snapshot of the run — every field needed to
+   * resume mid-round, including the RNG state so the exact draw sequence
+   * continues. Cards, tree nodes and upgrades are already plain data, so they
+   * round-trip through JSON unchanged.
+   */
+  serialize(): GameSnapshot {
+    return {
+      cfg: this.cfg,
+      seed: this.seed,
+      rngState: this.rng.saveState(),
+      phase: this.phase,
+      deck: this.deck,
+      round: this.round,
+      target: this.target,
+      tree: this.tree,
+      roundDeck: this.roundDeck,
+      hand: this.hand,
+      turn: this.turn,
+      fishCount: this.fishCount,
+      offers: this.offers,
+      lastResult: this.lastResult,
+      bestScore: this.bestScore,
+      roundsCleared: this.roundsCleared,
+      currentDepth: this.currentDepth,
+      focus: this.focus,
+      rerollCount: this.rerollCount,
+    };
+  }
+
+  /** Rebuild a Game from a {@link serialize} snapshot, restoring the RNG state. */
+  static fromSnapshot(s: GameSnapshot): Game {
+    const g = new Game(s.cfg, s.seed);
+    g.rng.loadState(s.rngState);
+    g.phase = s.phase;
+    g.deck = s.deck;
+    g.round = s.round;
+    g.target = s.target;
+    g.tree = s.tree;
+    g.roundDeck = s.roundDeck;
+    g.hand = s.hand;
+    g.turn = s.turn;
+    g.fishCount = s.fishCount;
+    g.offers = s.offers;
+    g.lastResult = s.lastResult;
+    g.bestScore = s.bestScore;
+    g.roundsCleared = s.roundsCleared;
+    g.currentDepth = s.currentDepth;
+    g.focus = s.focus;
+    g.rerollCount = s.rerollCount;
+    return g;
+  }
+}
+
+/** A complete JSON-serializable snapshot of a run (see {@link Game.serialize}). */
+export interface GameSnapshot {
+  cfg: GameConfig;
+  seed: number;
+  rngState: number;
+  phase: Phase;
+  deck: Card[];
+  round: number;
+  target: number;
+  tree: Tree;
+  roundDeck: Card[];
+  hand: Card[];
+  turn: number;
+  fishCount: number;
+  offers: Upgrade[];
+  lastResult: EvaluateResult | null;
+  bestScore: number;
+  roundsCleared: number;
+  currentDepth: number;
+  focus: number;
+  rerollCount: number;
 }

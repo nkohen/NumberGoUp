@@ -23,6 +23,20 @@ import {
 } from "../render/renderer";
 import { EvaluateAnimation } from "../render/animation";
 import { devLog } from "../dev/devlog";
+import {
+  makeSave,
+  saveLocal,
+  loadLocal,
+  clearLocal,
+  writeBoundFile,
+  bindAndSaveFile,
+  hasBoundFile,
+  canBindFile,
+  boundFileName,
+  downloadSave,
+  openSaveFile,
+  type SaveData,
+} from "./persistence";
 
 type Screen = "title" | "playing" | "evaluating" | "shop" | "gameover";
 
@@ -74,6 +88,9 @@ interface UiBoxes {
   helpBtn?: Rect;
   tutorialBtn?: Rect;
   deckBtn?: Rect;
+  saveBtn?: Rect;
+  continueBtn?: Rect;
+  loadBtn?: Rect;
   tutBack?: Rect;
   tutNext?: Rect;
   tutSkip?: Rect;
@@ -110,6 +127,12 @@ export class App {
   /** Eased 0..1 intensity of the "depth limit reached" beam. */
   private depthBeam = 0;
 
+  /** Transient toast (e.g. "Saved to file") + the time it should fade out. */
+  private toastMsg = "";
+  private toastUntil = 0;
+  /** Cached local autosave presence, refreshed when we enter the title screen. */
+  private localSave: SaveData | null = null;
+
   /** DEV/URL overrides applied on top of the chosen mode's config. */
   private overrideConfig: Partial<GameConfig>;
   private seedOverride?: number;
@@ -130,6 +153,8 @@ export class App {
     } catch {
       /* ignore */
     }
+    // Pick up any prior autosave so the title screen can offer "Continue".
+    this.localSave = loadLocal();
 
     this.bindEvents();
     requestAnimationFrame(this.loop);
@@ -199,7 +224,11 @@ export class App {
 
     switch (this.screen) {
       case "title":
-        if (this.ui.classicBtn && pointInRect(x, y, this.ui.classicBtn)) {
+        if (this.ui.continueBtn && pointInRect(x, y, this.ui.continueBtn)) {
+          this.continueRun();
+        } else if (this.ui.loadBtn && pointInRect(x, y, this.ui.loadBtn)) {
+          void this.loadFromFile();
+        } else if (this.ui.classicBtn && pointInRect(x, y, this.ui.classicBtn)) {
           sound.click();
           this.startRun("classic");
         } else if (this.ui.functionsBtn && pointInRect(x, y, this.ui.functionsBtn)) {
@@ -225,6 +254,7 @@ export class App {
           this.restart();
         } else if (this.ui.backToTitle && pointInRect(x, y, this.ui.backToTitle)) {
           sound.click();
+          this.localSave = loadLocal();
           this.screen = "title";
         }
         return;
@@ -245,6 +275,10 @@ export class App {
       sound.click();
       return;
     }
+    if (this.ui.saveBtn && pointInRect(x, y, this.ui.saveBtn)) {
+      void this.onSaveClicked();
+      return;
+    }
     // Buttons first.
     if (this.ui.evaluateBtn && pointInRect(x, y, this.ui.evaluateBtn)) {
       this.beginEvaluate();
@@ -262,6 +296,7 @@ export class App {
           focusLeft: this.game.focus,
           hand: this.game.hand.map((c) => cardLabel(c)),
         });
+        this.autosave();
       }
       return;
     }
@@ -301,6 +336,7 @@ export class App {
           rerollCount: this.game.rerollCount,
           offers: this.game.offers.map((o) => o.title),
         });
+        this.autosave();
       } else {
         sound.error();
       }
@@ -325,6 +361,7 @@ export class App {
         });
         this.logRoundStart();
         this.screen = "playing";
+        this.autosave();
       } else {
         sound.error();
       }
@@ -347,6 +384,7 @@ export class App {
         });
         this.logRoundStart();
         this.screen = "playing";
+        this.autosave();
         return;
       }
     }
@@ -366,6 +404,7 @@ export class App {
       });
       this.logRoundStart();
       this.screen = "playing";
+      this.autosave();
     }
   }
 
@@ -424,6 +463,7 @@ export class App {
           14,
           150,
         );
+        this.autosave();
       } else {
         // Landed on a node but the game rejected the placement.
         devLog("play_failed", {
@@ -494,6 +534,86 @@ export class App {
     this.hintShown = true;
     this.logRunStart("restart");
     this.logRoundStart();
+    this.autosave();
+  }
+
+  // --- save / load ------------------------------------------------------------
+
+  /**
+   * Persist the current run. Called after every state-changing action. Always
+   * writes the localStorage autosave (powers "Continue"); if the player has
+   * bound a save file, mirrors the write there too. No-op during the tutorial
+   * (scripted, fixed-seed) and on non-run screens.
+   */
+  private autosave(): void {
+    if (this.tutorialActive) return;
+    if (this.screen !== "playing" && this.screen !== "shop") return;
+    const data = makeSave(this.game.serialize());
+    this.localSave = data;
+    saveLocal(data);
+    if (hasBoundFile()) void writeBoundFile(data);
+  }
+
+  /** Show a short-lived toast message (save feedback, etc.). */
+  private flash(msg: string): void {
+    this.toastMsg = msg;
+    this.toastUntil = this.time + 2.4;
+  }
+
+  /**
+   * The in-play "Save" button. On Chromium it binds a real file the first time
+   * (and auto-saves to it thereafter); on other browsers it downloads a backup.
+   * Either way the run is already continuously autosaved to localStorage.
+   */
+  private async onSaveClicked(): Promise<void> {
+    sound.click();
+    const data = makeSave(this.game.serialize());
+    saveLocal(data);
+    this.localSave = data;
+    if (hasBoundFile()) {
+      await writeBoundFile(data);
+      this.flash(`Saved to ${boundFileName()}`);
+    } else if (canBindFile()) {
+      const ok = await bindAndSaveFile(data);
+      this.flash(ok ? `Autosaving to ${boundFileName()}` : "Save cancelled");
+    } else {
+      downloadSave(data);
+      this.flash("Save file downloaded");
+    }
+  }
+
+  /** Resume a run from a save payload (from Continue or a loaded file). */
+  private resumeFrom(data: SaveData): void {
+    this.game = Game.fromSnapshot(data.game);
+    this.localSave = data;
+    // A finished run resumes to its summary; otherwise back into play/shop.
+    this.screen =
+      this.game.phase === "gameover"
+        ? "gameover"
+        : this.game.phase === "shop"
+          ? "shop"
+          : "playing";
+    this.showHelp = false;
+    this.showDeck = false;
+    this.hintShown = true;
+    sound.click();
+  }
+
+  /** Title-screen "Continue": resume the most recent local autosave. */
+  private continueRun(): void {
+    const data = this.localSave ?? loadLocal();
+    if (data) this.resumeFrom(data);
+  }
+
+  /** Title-screen "Load from file": pick a save file and resume it. */
+  private async loadFromFile(): Promise<void> {
+    sound.click();
+    const data = await openSaveFile();
+    if (data) {
+      this.resumeFrom(data);
+    } else {
+      this.flash("Couldn't load that file");
+    }
   }
 
   private logRunStart(cause: "new" | "restart"): void {
@@ -609,8 +729,33 @@ export class App {
         this.drawGameOver();
         break;
     }
+    this.drawToast();
     requestAnimationFrame(this.loop);
   };
+
+  /** A brief bottom-center message (save confirmations, load errors). */
+  private drawToast(): void {
+    if (!this.toastMsg || this.time >= this.toastUntil) return;
+    const r = this.renderer;
+    const ctx = r.ctx;
+    const fade = Math.min(1, (this.toastUntil - this.time) / 0.4);
+    const w = Math.min(r.width - 40, 340);
+    const h = 42;
+    const x = r.width / 2 - w / 2;
+    const y = r.height - r.handHeight - 92;
+    ctx.save();
+    ctx.globalAlpha = fade;
+    ctx.fillStyle = "rgba(18,24,54,0.94)";
+    ctx.beginPath();
+    if (typeof ctx.roundRect === "function") ctx.roundRect(x, y, w, h, 12);
+    else ctx.rect(x, y, w, h);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(150,170,255,0.5)";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    r.text(this.toastMsg, r.width / 2, y + h / 2 + 1, { size: 15, weight: 700 });
+    ctx.restore();
+  }
 
   // --- drawing per screen -----------------------------------------------------
 
@@ -629,34 +774,55 @@ export class App {
       color: "rgba(234,240,255,0.7)",
     });
 
-    // Two modes: Classic (numbers & +/×) and Functions (adds x and ƒ).
+    // Menu: Continue (if a run is saved), start a new game, tutorial, load.
+    // Stacked from a running cursor so it adapts to whether a save exists and
+    // stays inside short mobile viewports.
     const bw = Math.min(260, r.width * 0.62);
-    const y0 = r.height * 0.54;
-    const classicBtn: Rect = { x: cx - bw / 2, y: y0, w: bw, h: 58 };
-    r.drawButton(classicBtn, "▶  Classic", { primary: true, time: this.time });
-    this.ui.classicBtn = classicBtn;
+    const half = (bw - 12) / 2;
+    const save = this.localSave;
+    const gap = 10;
+    let y = r.height * (save ? 0.47 : 0.54);
+    const stack = (h: number): Rect => {
+      const rect: Rect = { x: cx - bw / 2, y, w: bw, h };
+      y += h + gap;
+      return rect;
+    };
 
-    // Functions mode is not ready to share yet — shown disabled as "Coming
-    // soon" and left unclickable (we never register its hit-rect).
-    const funcBtn: Rect = { x: cx - bw / 2, y: y0 + 70, w: bw, h: 58 };
+    if (save) {
+      // Resume is the primary call-to-action while a run is in progress.
+      const cont = stack(56);
+      r.drawButton(cont, `▶  Continue · Round ${save.game.round}`, { primary: true, time: this.time });
+      this.ui.continueBtn = cont;
+      const classicBtn = stack(46);
+      r.drawButton(classicBtn, "New Classic game");
+      this.ui.classicBtn = classicBtn;
+    } else {
+      this.ui.continueBtn = undefined;
+      const classicBtn = stack(56);
+      r.drawButton(classicBtn, "▶  Classic", { primary: true, time: this.time });
+      this.ui.classicBtn = classicBtn;
+    }
+
+    // Functions mode is not ready to share yet — disabled placeholder.
+    const funcBtn = stack(46);
     r.drawButton(funcBtn, "ƒ  Functions  (soon)", { enabled: false });
     this.ui.functionsBtn = undefined;
-    r.text(
-      "Functions mode (variable x + evaluate operator) — coming soon",
-      cx,
-      y0 + 70 + 74,
-      { size: 13, color: "rgba(183,155,255,0.6)" },
-    );
 
     // Tutorial + How-to-play, side by side.
-    const half = (bw - 12) / 2;
-    const rowY = y0 + 150;
+    const rowY = y;
+    y += 44 + gap;
     const tutorialBtn: Rect = { x: cx - bw / 2, y: rowY, w: half, h: 44 };
-    r.drawButton(tutorialBtn, "📖  Tutorial", { primary: true, time: this.time });
+    r.drawButton(tutorialBtn, "📖  Tutorial", { primary: !save, time: this.time });
     this.ui.tutorialBtn = tutorialBtn;
     const helpBtn: Rect = { x: cx - bw / 2 + half + 12, y: rowY, w: half, h: 44 };
     r.drawButton(helpBtn, "How to play");
     this.ui.helpBtn = helpBtn;
+
+    // Load a save file (always available; on Chromium it also re-binds the file
+    // for auto-save, elsewhere it's a file picker).
+    const loadBtn = stack(40);
+    r.drawButton(loadBtn, "📂  Load from file");
+    this.ui.loadBtn = loadBtn;
 
     if (this.showHelp) {
       this.drawRulesPanel();
@@ -761,6 +927,7 @@ export class App {
     this.drag = null;
     this.showHelp = false;
     this.showDeck = false;
+    this.localSave = loadLocal();
     this.screen = "title";
   }
 
@@ -1209,6 +1376,7 @@ export class App {
     const btnY = this.renderer.height - this.renderer.handHeight - 44;
     this.ui.helpBtn = { x: 12, y: btnY, w: 40, h: 36 };
     this.ui.deckBtn = { x: 58, y: btnY, w: 84, h: 36 };
+    this.ui.saveBtn = { x: 150, y: btnY, w: 84, h: 36 };
   }
 
   private drawPlayControls(): void {
@@ -1235,6 +1403,11 @@ export class App {
       r.drawButton(this.ui.deckBtn, "🃏 Deck");
     } else {
       this.ui.deckBtn = undefined;
+    }
+    if (this.ui.saveBtn && !this.tutorialActive) {
+      r.drawButton(this.ui.saveBtn, "💾 Save");
+    } else {
+      this.ui.saveBtn = undefined;
     }
     if (this.showHelp) this.drawRulesPanel();
     if (this.showDeck) this.drawDeckPanel();
@@ -1339,9 +1512,13 @@ export class App {
       if (won) {
         sound.win();
         this.screen = "shop";
+        this.autosave();
       } else {
         sound.lose();
         this.screen = "gameover";
+        // The run is over — drop the autosave so "Continue" only offers live runs.
+        clearLocal();
+        this.localSave = null;
       }
     }
   }

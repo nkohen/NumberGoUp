@@ -15,6 +15,16 @@ export class Rng {
     this.state = (seed >>> 0) || 0x9e3779b9;
   }
 
+  /** Snapshot the internal state (for save/load — resumes the exact sequence). */
+  saveState(): number {
+    return this.state;
+  }
+
+  /** Restore a previously snapshotted state (see {@link saveState}). */
+  loadState(state: number): void {
+    this.state = (state >>> 0) || 0x9e3779b9;
+  }
+
   /** Returns a float in [0, 1). */
   next(): number {
     // mulberry32
