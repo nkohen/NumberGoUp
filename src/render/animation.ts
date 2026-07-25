@@ -91,8 +91,24 @@ export function smooth(current: number, target: number, rate: number, dt: number
 export interface NodeMergeState {
   /** 0..1 progress of this node revealing its aggregate value. */
   reveal: number;
-  /** 0..1 progress of this node being absorbed into its parent (shrinks). */
+  /** 0..1 progress of this node being absorbed into its parent. */
   absorb: number;
+  /**
+   * 0..1 — the child sliding toward its parent until their rims just touch.
+   * Runs during the first half of `absorb`; radius stays full throughout.
+   */
+  approach: number;
+  /**
+   * 0..1 — the child shrinking away into the parent's surface once the rims
+   * meet. Runs during the second half of `absorb`.
+   */
+  consume: number;
+  /**
+   * 0..1 — how much THIS (operator) node bulges as it swallows its two
+   * children: swells while they are consumed, then deflates back to normal a
+   * beat after they vanish. Meaningful only for operator bubbles.
+   */
+  swell: number;
   /** The evaluated numeric value to display once revealed. */
   value: number;
 }
@@ -159,6 +175,18 @@ export class EvaluateAnimation {
       const parentRevealStart = ph * this.stepDur;
       absorb = clamp01((this.elapsed - parentRevealStart) / this.stepDur);
     }
-    return { reveal, absorb, value: this.values.get(id) ?? 0 };
+    // Split the absorption into an approach (rims drift together, full size)
+    // then a consume (the child dissolves into the parent's surface).
+    const approach = clamp01(absorb / 0.5);
+    const consume = clamp01((absorb - 0.5) / 0.5);
+
+    // A node's own reveal window is exactly when its children are absorbed, so
+    // its children's "consume" progress is the back half of its reveal. The
+    // node swells over that, then deflates over a short beat afterward.
+    const childrenConsume = clamp01((reveal - 0.5) / 0.5);
+    const deflate = clamp01((this.elapsed - (h + 1) * this.stepDur) / (this.stepDur * 0.7));
+    const swell = childrenConsume * (1 - deflate);
+
+    return { reveal, absorb, approach, consume, swell, value: this.values.get(id) ?? 0 };
   }
 }

@@ -19,6 +19,7 @@ import { layoutTree } from "./layout";
 import {
   smooth,
   easeOutBack,
+  easeInOutCubic,
   clamp01,
   EvaluateAnimation,
   lerp,
@@ -289,16 +290,67 @@ export class Renderer {
     }
     this.bubblesSettled = settled;
 
+    // Merge transforms: during the "evaluate" animation the two children of an
+    // operator slide inward — keeping full size — until their rims kiss the
+    // parent's, then dissolve into the parent's surface as the parent swells to
+    // swallow them and settles back to normal. So the operator and its two
+    // number bubbles visibly coalesce into one bubble. Computed top-down so a
+    // child stays tangent to its parent's *current* (possibly swelling, or
+    // itself-absorbing) position and radius.
+    const SWELL_AMT = 0.32; // fraction a bubble bulges while eating its children
+    const merge = new Map<NodeId, { x: number; y: number; r: number; alpha: number }>();
+    const computeMerge = (
+      node: TreeNode,
+      parent: { x: number; y: number; r: number } | null,
+    ): void => {
+      const bv = this.bubbles.get(node.id)!;
+      const st = opts.evalAnim!.stateFor(node.id);
+      let r = bv.r;
+      if (node.type === "op") r *= 1 + SWELL_AMT * st.swell; // bulge as it swallows
+      r *= 1 - st.consume; // shrink away as our own parent swallows us
+      let x = bv.x;
+      let y = bv.y;
+      let alpha = 1;
+      if (parent) {
+        // Slide along the rest direction from the parent, resting tangent to
+        // its rim; the tangent point tracks both radii so we stay kissing as
+        // the parent swells and we shrink.
+        const dx = bv.x - parent.x;
+        const dy = bv.y - parent.y;
+        const restDist = Math.hypot(dx, dy) || 1;
+        const tangent = parent.r + r;
+        const dist = lerp(restDist, tangent, easeInOutCubic(st.approach));
+        x = parent.x + (dx / restDist) * dist;
+        y = parent.y + (dy / restDist) * dist;
+        // Stay a solid bubble through the approach; fade out only in the final
+        // stretch of being consumed.
+        alpha = 1 - clamp01((st.consume - 0.55) / 0.45);
+      }
+      const xf = { x, y, r, alpha };
+      merge.set(node.id, xf);
+      if (node.type === "op") {
+        computeMerge(node.left, xf);
+        computeMerge(node.right, xf);
+      }
+    };
+    if (opts.evalAnim) computeMerge(root, null);
+
+    // Draw position for a node: its merge transform during evaluate, else its
+    // resting animated bubble.
+    const posOf = (id: NodeId): { x: number; y: number } =>
+      (opts.evalAnim ? merge.get(id) : this.bubbles.get(id)) ?? this.bubbles.get(id)!;
+
     // Edges first (under bubbles).
     this.ctx.lineCap = "round";
     for (const c of circles) {
       if (c.node.type !== "op") continue;
-      const parent = this.bubbles.get(c.id)!;
+      const parent = posOf(c.id);
       for (const child of [c.node.left, c.node.right]) {
         const cv = this.bubbles.get(child.id);
         if (!cv) continue;
+        const cd = posOf(child.id);
         const grow = clamp01(cv.spawn);
-        this.drawEdge(parent.x, parent.y, cv.x, cv.y, grow, opts.evalAnim, child.id);
+        this.drawEdge(parent.x, parent.y, cd.x, cd.y, grow, opts.evalAnim, child.id);
       }
     }
 
@@ -307,6 +359,8 @@ export class Renderer {
       const bv = this.bubbles.get(c.id)!;
       const pop = easeOutBack(clamp01(bv.spawn));
       let r = bv.r * pop;
+      let x = bv.x;
+      let y = bv.y;
       let alpha = 1;
       let label = this.labelFor(c.node);
       // An empty × factor reads as "1" (its identity); + slots stay "0".
@@ -315,17 +369,17 @@ export class Renderer {
 
       if (opts.evalAnim) {
         const st = opts.evalAnim.stateFor(c.id);
-        // Reveal aggregate value; shrink as absorbed into parent.
-        if (st.reveal > 0) {
+        const m = merge.get(c.id)!;
+        x = m.x;
+        y = m.y;
+        r = m.r;
+        alpha = m.alpha;
+        // An operator reveals its aggregate value once it starts swallowing its
+        // children (mid-reveal); leaves show their number from the start.
+        const swapAt = c.node.type === "op" ? 0.5 : 0;
+        if (st.reveal > swapAt) {
           label = compactNumber(st.value);
           showValue = true;
-        }
-        const absorbScale = 1 - 0.85 * st.absorb;
-        r *= absorbScale;
-        alpha *= 1 - 0.75 * st.absorb;
-        // A little pop when a node reveals its value.
-        if (st.reveal > 0 && st.reveal < 1) {
-          r *= 1 + 0.18 * Math.sin(st.reveal * Math.PI);
         }
       }
 
@@ -339,7 +393,7 @@ export class Renderer {
 
       const isTarget = opts.legalTargets?.has(c.id) ?? false;
       const isHover = opts.hoverId === c.id;
-      this.drawBubble(bv.x, bv.y, r, c.node, label, {
+      this.drawBubble(x, y, r, c.node, label, {
         alpha,
         target: isTarget,
         hover: isHover,
@@ -395,7 +449,8 @@ export class Renderer {
     let alpha = 0.5;
     if (evalAnim) {
       const st = evalAnim.stateFor(childId);
-      alpha *= 1 - 0.9 * st.absorb;
+      // Fade the edge out as the child drifts in; gone by the time rims meet.
+      alpha *= 1 - st.approach;
     }
     const ctx = this.ctx;
     ctx.strokeStyle = `rgba(180,200,255,${alpha})`;
