@@ -1006,7 +1006,11 @@ export class Renderer {
 
   // --- particles --------------------------------------------------------------
 
-  burst(x: number, y: number, color: string, count = 12, speed = 120): void {
+  /**
+   * Spawn a radial spray of particles. `color` may be a single color string or
+   * a factory called once per particle (e.g. for a random-rainbow burst).
+   */
+  burst(x: number, y: number, color: string | (() => string), count = 12, speed = 120): void {
     for (let i = 0; i < count; i++) {
       const a = (Math.PI * 2 * i) / count + Math.random() * 0.5;
       const s = speed * (0.5 + Math.random());
@@ -1018,9 +1022,14 @@ export class Renderer {
         life: 0,
         maxLife: 0.5 + Math.random() * 0.4,
         r: 2 + Math.random() * 3,
-        color,
+        color: typeof color === "function" ? color() : color,
       });
     }
+  }
+
+  /** A vivid random hue across the full spectrum — for rainbow bursts. */
+  static rainbowColor(): string {
+    return `hsl(${Math.floor(Math.random() * 360)}, 95%, 62%)`;
   }
 
   private updateParticles(dt: number): void {

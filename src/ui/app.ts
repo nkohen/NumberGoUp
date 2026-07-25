@@ -85,6 +85,7 @@ interface UiBoxes {
   handRects: HandCardRect[];
   nodeCircles: NodeCircle[];
   redrawBtn?: Rect;
+  homeBtn?: Rect;
   muteRect?: Rect;
   classicBtn?: Rect;
   functionsBtn?: Rect;
@@ -313,6 +314,12 @@ export class App {
     }
     if (this.ui.saveBtn && pointInRect(x, y, this.ui.saveBtn)) {
       void this.onSaveClicked();
+      return;
+    }
+    if (this.ui.homeBtn && pointInRect(x, y, this.ui.homeBtn)) {
+      sound.click();
+      this.localSave = loadLocal(); // refresh so the title offers "Continue"
+      this.screen = "title";
       return;
     }
     // Buttons first.
@@ -1533,6 +1540,13 @@ export class App {
     // no manual Evaluate button.)
     this.ui.redrawBtn = this.game.canRedraw() ? { x: 12, y, w: 148, h: 44 } : undefined;
 
+    // Home button: square icon in the top-right, opposite the redraw button. The
+    // run autosaves continuously, so this is a non-destructive exit ("Continue"
+    // on the title picks it up). Hidden during the tutorial to keep it focused.
+    this.ui.homeBtn = this.tutorialActive
+      ? undefined
+      : { x: this.renderer.width - 12 - 44, y, w: 44, h: 44 };
+
     const btnY = this.renderer.height - this.renderer.handHeight - 44;
     this.ui.helpBtn = { x: 12, y: btnY, w: 40, h: 36 };
     this.ui.deckBtn = { x: 58, y: btnY, w: 84, h: 36 };
@@ -1545,6 +1559,9 @@ export class App {
       const cost = this.game.redrawCost;
       const label = cost > 0 ? `↻ Redraw  −${cost} ◆` : "↻ Redraw (free)";
       r.drawButton(this.ui.redrawBtn, label);
+    }
+    if (this.ui.homeBtn) {
+      r.drawButton(this.ui.homeBtn, "🏠");
     }
     // Help / deck buttons are hidden during the tutorial to keep it focused.
     if (this.ui.helpBtn && !this.tutorialActive) {
@@ -1650,7 +1667,7 @@ export class App {
       // on-screen position so the burst lands on the bubble, not its layout slot.
       if (this.evalAnim.progress > 0.98 && !this.rootBurstDone) {
         const root = r.lastEvalRootScreen ?? circles.find((c) => c.id === g.root.id);
-        if (root) r.burst(root.x, root.y, "#8fe4ff", 26, 220);
+        if (root) r.burst(root.x, root.y, () => Renderer.rainbowColor(), 36, 220);
         this.rootBurstDone = true;
       }
     }
