@@ -9,7 +9,8 @@
  *   - **iOS Safari has no Vibration API at all**, so iPhones never buzz from a
  *     web page. This is a hard platform limitation, not something we can shim.
  *   - Android Chrome/Firefox support it; a prior user gesture ("sticky
- *     activation") is required, which the evaluate button tap satisfies.
+ *     activation") is required, which the card drag/drop that triggers the
+ *     round's auto-resolve satisfies.
  *   - The OS/browser may still ignore it if the device has vibration disabled.
  *
  * `navigator.vibrate` throws in no browser we target, but we guard anyway so a

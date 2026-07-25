@@ -35,13 +35,15 @@ puzzle: build the best tree you can from the cards you draw.
 
 ### The turn
 1. Shuffle deck, draw 5.
-2. Either **play one** card (rest return to deck, played card consumed, redraw)
-   or **Evaluate**.
-3. A round lasts at most `deckSize` plays (the deck is spent one card per turn).
+2. **Play one** card (rest return to deck, played card consumed, redraw). An
+   unplayable-but-progressable hand auto-redraws for free.
+3. The round **auto-resolves** on clearing the target or getting stuck — there
+   is no manual Evaluate button.
+4. A round lasts at most `deckSize` plays (the deck is spent one card per turn).
 
 ### Winning / losing
-- Evaluate ≥ target → **round cleared** → shop.
-- Evaluate < target → **run over**.
+- Score ≥ target → **round cleared** → shop.
+- No move left with score < target → **run over**.
 
 ## Numbers (current tuning)
 

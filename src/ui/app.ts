@@ -4,7 +4,8 @@
  *
  * Screens:
  *   title      → press Play to start a run
- *   playing    → drag cards onto glowing bubbles; Evaluate to finalize
+ *   playing    → drag cards onto glowing bubbles; the round auto-resolves
+ *                when you clear the target (or get stuck)
  *   evaluating → the merge animation plays out, then routes to shop/gameover
  *   shop       → pick one of three deck upgrades (or skip)
  *   gameover   → run summary; only exit is back to the title
@@ -44,17 +45,17 @@ import {
 type Screen = "title" | "playing" | "evaluating" | "shop" | "gameover" | "won";
 
 /** A single scripted beat of the interactive tutorial. */
-type TutPhase = "play" | "evaluate" | "explain" | "choice" | "outro";
+type TutPhase = "play" | "explain" | "choice" | "outro";
 /** A UI region to ring for the current beat. */
 type TutHighlight =
-  | "evaluate" | "options" | "actions" | "option0"
+  | "options" | "actions" | "option0"
   | "grow" | "reroll" | "skip" | "redraw" | "save";
 /** The scripted shop action a "choice" beat performs when clicked. */
 type TutChoice = "upgrade0" | "grow" | "reroll" | "skip";
 interface TutBeat {
   phase: TutPhase;
   text: string;
-  /** Auto-advance predicate (play / evaluate / choice beats). */
+  /** Auto-advance predicate (play / choice beats). */
   done: boolean;
   /** Hand-card index to highlight & allow (play beats). */
   hand?: number;
@@ -83,7 +84,6 @@ interface DragState {
 interface UiBoxes {
   handRects: HandCardRect[];
   nodeCircles: NodeCircle[];
-  evaluateBtn?: Rect;
   redrawBtn?: Rect;
   muteRect?: Rect;
   classicBtn?: Rect;
@@ -316,10 +316,6 @@ export class App {
       return;
     }
     // Buttons first.
-    if (this.ui.evaluateBtn && pointInRect(x, y, this.ui.evaluateBtn)) {
-      this.beginEvaluate();
-      return;
-    }
     if (this.ui.redrawBtn && pointInRect(x, y, this.ui.redrawBtn)) {
       const cost = this.game.redrawCost;
       if (this.game.redraw()) {
@@ -1212,9 +1208,6 @@ export class App {
         }
         return;
       }
-      case "evaluate":
-        if (this.ui.evaluateBtn && pointInRect(x, y, this.ui.evaluateBtn)) this.beginEvaluate();
-        return;
       case "explain":
         // Everything else is locked; any tap advances the explanation.
         sound.click();
@@ -1291,7 +1284,6 @@ export class App {
     }
     const ringBtn = (r: Rect | undefined, color: string) => { if (r) this.drawRingRect(r, color); };
     switch (beat.highlight) {
-      case "evaluate": ringBtn(this.ui.evaluateBtn, "#7CF29B"); break;
       case "redraw": ringBtn(this.ui.redrawBtn, "#8fe4ff"); break;
       case "grow": ringBtn(this.ui.shopGrow, "#7CF29B"); break;
       case "reroll": ringBtn(this.ui.shopReroll, "#7CF29B"); break;
@@ -1534,13 +1526,11 @@ export class App {
   }
 
   private layoutPlayControls(): void {
-    const r = this.renderer;
     const y = this.renderer.hudHeight + 8;
-    const evalBtn: Rect = { x: r.width - 148, y, w: 136, h: 44 };
-    this.ui.evaluateBtn = evalBtn;
-
     // Redraw button: free when stuck (safety net), otherwise a paid "fish" to
     // hunt for a card (e.g. a ×). Shown whenever a re-draw is possible.
+    // (Rounds auto-resolve on clearing the target or getting stuck, so there is
+    // no manual Evaluate button.)
     this.ui.redrawBtn = this.game.canRedraw() ? { x: 12, y, w: 148, h: 44 } : undefined;
 
     const btnY = this.renderer.height - this.renderer.handHeight - 44;
@@ -1551,17 +1541,6 @@ export class App {
 
   private drawPlayControls(): void {
     const r = this.renderer;
-    // Hidden during the tutorial: it auto-completes on reaching the target, so
-    // there's no manual evaluate step (matching the real game's auto-scoring).
-    if (this.ui.evaluateBtn && !this.tutorialActive) {
-      const canScore = this.game.currentScore >= this.game.target;
-      r.drawButton(this.ui.evaluateBtn, "Evaluate ✓", {
-        primary: canScore,
-        time: this.time,
-      });
-    } else if (this.tutorialActive) {
-      this.ui.evaluateBtn = undefined;
-    }
     if (this.ui.redrawBtn) {
       const cost = this.game.redrawCost;
       const label = cost > 0 ? `↻ Redraw  −${cost} ◆` : "↻ Redraw (free)";

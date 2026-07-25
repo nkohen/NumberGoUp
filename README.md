@@ -56,8 +56,9 @@ no runtime dependencies.
      `0` to fill.
 3. **Mind the zeros.** An unfilled `0` is worth 0 — and `× 0` zeroes out the
    whole branch, so fill your multiplications!
-4. **Evaluate.** When you're happy, hit **Evaluate**. The tree collapses
-   bottom-up into a single number: your score.
+4. **Auto-resolve.** The round scores itself the moment you clear the target
+   (playing on would only overshoot) or run out of legal moves. The tree
+   collapses bottom-up into a single number: your score.
 5. **Clear & upgrade.** Beat the target to clear the round and pick one of three
    deck upgrades (add a card, thin a weak card, or promote a number). Targets
    keep rising — the run ends when you fall short.
@@ -69,7 +70,7 @@ evaluate it at. Outside any `ƒ`, `x` is 0. See
 [`docs/GAME_DESIGN.md`](docs/GAME_DESIGN.md#functions) for the full rules.
 
 Controls: **drag** to place cards, **click** buttons, `M` to mute, `Enter`/`Space`
-to Play / Evaluate / restart.
+to Play / restart.
 
 ## Project layout
 

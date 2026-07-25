@@ -43,11 +43,12 @@ Taken directly from your brief, and made precise:
 
 - A **round** starts with the full deck shuffled and the tree reset to a single
   `0` slot.
-- Each **turn**: shuffle the deck, draw 5. Then either
-  - **play one card** into the tree — the other four return to the deck, the
-    played card is consumed for the rest of the round, and a fresh hand is
-    drawn; or
-  - **Evaluate** to finalize.
+- Each **turn**: shuffle the deck, draw 5, then **play one card** into the tree —
+  the other four return to the deck, the played card is consumed for the rest of
+  the round, and a fresh hand is drawn.
+- The round **auto-resolves** (scores itself) the moment you clear the target —
+  precision means playing on could only overshoot — or when no legal move
+  remains anywhere. There is no manual Evaluate button.
 - Because the played card is consumed, the deck shrinks by one per turn, so a
   round lasts **at most `deckSize` plays**. That's the natural limit on tree
   size — no arbitrary turn counter needed. (Decision: this is what bounds a
@@ -58,11 +59,13 @@ Taken directly from your brief, and made precise:
 back), but randomness still shapes which cards are available each turn, and the
 total card budget is small.
 
-**Stuck-hand safeguard.** The only way to have _no_ legal move is an opening hand
-that is all operations while the tree is still a bare `0` (ops need a number to
-split). Rather than force a losing Evaluate, a **Redraw** button appears _only_
-when you have no legal move. It can't be abused to stall because it's unavailable
-the moment any play is possible. (See QUESTIONS.md #3.)
+**Stuck-hand safeguard.** A hand can have _no_ legal move (e.g. an opening hand
+that is all operations while the tree is still a bare `0`, since ops need a
+number to split). When the deck can still progress, the hand **auto-redraws**
+for free until it's playable — no confusing forced click. A paid **Redraw**
+button remains for voluntary "fishing" when you _do_ have a legal move but want
+different cards. If no redraw could ever help, the round auto-resolves instead.
+(See QUESTIONS.md #3.)
 
 ## 3. The tree grammar
 
