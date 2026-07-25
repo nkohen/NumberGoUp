@@ -92,9 +92,19 @@ export const DEFAULT_CONFIG: GameConfig = {
   // rising target forces you to discover multiplication. Tunable — see docs.
   baseTarget: 4,
   // Steeper than the original 1.6: with a shallow tree the best build climbs
-  // fast as the deck improves, so a 1.85 curve keeps the target chasing it.
+  // fast as the deck improves, so a steep curve keeps the target chasing it.
   // Growing the tree (via focus) is what lets a skilled player keep pace.
-  targetGrowth: 1.85,
+  //
+  // 1.85 → 1.90 after the placement-preview "empty × slot = 1 identity" change.
+  // That change is a floor-only forgiveness buff: modeling (tools/analyze.ts +
+  // tools/survival.ts) shows the OPTIMAL-play economy is byte-identical, while
+  // the unskilled floor at depth ≥3 rises ~40% (avg 4.1→5.7) and the 8% zero
+  // rate vanishes — i.e. it eases the MID-LATE game (depth 2 is unchanged).
+  // Because targets compound, nudging growth re-pressures exactly there: rounds
+  // 1–4 targets are identical (4, 8, 14, 26) so the fragile early bootstrap is
+  // untouched, but round 10+ is ~40% higher, reclaiming the difficulty the buff
+  // gives back — without penalising skilled players via a lower ceiling.
+  targetGrowth: 1.9,
   upgradeChoices: 3,
   startDepth: 2,
   precisionModel: "tiered",

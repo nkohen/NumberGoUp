@@ -85,7 +85,7 @@ sprouts smoothly.
 
 - **Score** = the evaluated tree.
 - **Target** for round _r_ = `ceil(baseTarget · growth^(r−1))` with
-  `baseTarget = 4`, `growth = 1.6` → 4, 7, 11, 17, 27, 42, 68, … These constants
+  `baseTarget = 4`, `growth = 1.9` → 4, 8, 14, 26, 49, 93, 176, … These constants
   live in `DEFAULT_CONFIG` (`src/core/game.ts`) and are trivially tunable.
 - Round 1 (target 4) is gently winnable additively on the starter deck (e.g.
   `2+2`). The additive ceiling of the starter deck is exactly 6 (`1+1+2+2`), so

@@ -48,10 +48,10 @@ Defined in `DEFAULT_CONFIG` (`src/core/game.ts`):
 |------------------|-------|-------------------------------------------|
 | `handSize`       | 5     | Cards drawn per turn                      |
 | `baseTarget`     | 4     | Round-1 target                            |
-| `targetGrowth`   | 1.6   | Target multiplier per round               |
+| `targetGrowth`   | 1.9   | Target multiplier per round               |
 | `upgradeChoices` | 3     | Offers shown in the shop                  |
 
-Target by round: **4, 7, 11, 17, 27, 42, 68, 109, …**
+Target by round: **4, 8, 14, 26, 49, 93, 176, 334, …**
 
 **Starter deck (8 cards):** `1 1 2 2 + + × ×`.
 
