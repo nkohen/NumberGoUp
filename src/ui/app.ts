@@ -9,10 +9,10 @@
  *   shop       → pick one of three deck upgrades (or skip)
  *   gameover   → run summary + restart
  */
-import { Game, GameConfig, GameMode, LandGrade, configForMode, targetForRound, MAX_DEPTH } from "../core/game";
+import { Game, GameConfig, GameMode, LandGrade, gradeLand, configForMode, targetForRound, MAX_DEPTH } from "../core/game";
 import { Card, cardLabel, numberCard, opCard } from "../core/cards";
 import type { Upgrade } from "../core/upgrades";
-import { NodeId, legalTargets, hasLegalTarget, listNodes, treeToString, treeHeight } from "../core/tree";
+import { NodeId, legalTargets, hasLegalTarget, listNodes, treeToString, treeHeight, place, evaluate } from "../core/tree";
 import { sound } from "../audio/sound";
 import {
   Renderer,
@@ -1138,12 +1138,68 @@ export class App {
       this.tutorialTick();
     }
 
+    // Placement preview: while hovering a legal target, show the score & grade
+    // this drop would produce, so precision doesn't require mental math.
+    if (!background) this.drawPlacementPreview();
+
     // Dragged card on top.
     if (this.drag) {
       const cardH = Math.min(this.renderer.handHeight * 0.72, 120);
       const cardW = cardH * 0.72;
       r.drawDraggedCard(this.drag.card, this.drag.x, this.drag.y - 10, cardW, cardH);
     }
+  }
+
+  /**
+   * [EXPERIMENT] Floating chip near the hovered target bubble showing what the
+   * whole tree would score if the dragged card landed there, plus the resulting
+   * precision grade (or a red "miss" warning if it would leave you under target).
+   */
+  private drawPlacementPreview(): void {
+    if (!this.drag || this.hoverNodeId === null) return;
+    const g = this.game;
+    const res = place(g.tree, this.hoverNodeId, this.drag.card, g.currentDepth);
+    if (!res) return;
+    const score = evaluate(res.tree.root);
+    const { grade, focusEarned, won } = gradeLand(score, g.target, g.cfg.precisionModel);
+    const circle = this.ui.nodeCircles.find((c) => c.id === this.hoverNodeId);
+    if (!circle) return;
+
+    const r = this.renderer;
+    const ctx = r.ctx;
+    const overPct = g.target > 0 ? Math.round(((score - g.target) / g.target) * 100) : 0;
+    const line1 = `→ ${score.toLocaleString()}`;
+    const line2 = won
+      ? `${grade}  +${focusEarned} ◆  (${overPct >= 0 ? "+" : ""}${overPct}%)`
+      : `UNDER TARGET — would miss`;
+    const color = won ? gradeColor(grade) : "#ff6b8a";
+
+    ctx.save();
+    ctx.font = "800 15px sans-serif";
+    const w1 = ctx.measureText(line1).width;
+    ctx.font = "700 13px sans-serif";
+    const w2 = ctx.measureText(line2).width;
+    const cw = Math.max(w1, w2) + 26;
+    const ch = 48;
+    let bx = circle.x - cw / 2;
+    let by = circle.y - circle.r - ch - 12;
+    bx = Math.max(8, Math.min(r.width - cw - 8, bx));
+    by = Math.max(r.hudHeight + 6, by);
+
+    ctx.fillStyle = "rgba(8,12,30,0.92)";
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.shadowColor = "rgba(0,0,0,0.5)";
+    ctx.shadowBlur = 12;
+    ctx.beginPath();
+    ctx.roundRect(bx, by, cw, ch, 10);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.stroke();
+    ctx.restore();
+
+    r.text(line1, bx + cw / 2, by + 17, { size: 15, weight: 800 });
+    r.text(line2, bx + cw / 2, by + 36, { size: 13, weight: 700, color });
   }
 
   private layoutPlayControls(): void {
