@@ -241,9 +241,10 @@ export class Game {
   // --- run lifecycle ----------------------------------------------------------
 
   /** Begin a fresh run from the title screen. */
-  startRun(): void {
+  startRun(deckOverride?: Card[]): void {
     this.deck =
-      this.cfg.mode === "functions" ? functionsStarterDeck() : starterDeck();
+      deckOverride ??
+      (this.cfg.mode === "functions" ? functionsStarterDeck() : starterDeck());
     this.round = 1;
     this.bestScore = 0;
     this.roundsCleared = 0;

@@ -10,7 +10,7 @@
  *   gameover   → run summary + restart
  */
 import { Game, GameConfig, GameMode, LandGrade, configForMode, targetForRound, MAX_DEPTH } from "../core/game";
-import { Card, cardLabel } from "../core/cards";
+import { Card, cardLabel, numberCard, opCard } from "../core/cards";
 import { NodeId, legalTargets, hasLegalTarget, listNodes, treeToString, treeHeight } from "../core/tree";
 import { sound } from "../audio/sound";
 import {
@@ -72,8 +72,10 @@ export class App {
   private showHelp = false;
   /** True while the in-play deck panel is open. */
   private showDeck = false;
-  /** Current tutorial page (null = tutorial closed). */
-  private tutorialPage: number | null = null;
+  /** True while the interactive tutorial is running. */
+  private tutorialActive = false;
+  /** Current guided step in the interactive tutorial (5 = outro). */
+  private tutorialStep = 0;
   private hintShown = true;
   /** Eased 0..1 intensity of the "depth limit reached" beam. */
   private depthBeam = 0;
@@ -158,12 +160,32 @@ export class App {
       return;
     }
 
+    // Interactive tutorial input takes priority whenever it's running.
+    if (this.tutorialActive) {
+      if (this.tutorialStep >= 5) {
+        // Outro: Play a real run, or back to title.
+        if (this.ui.tutNext && pointInRect(x, y, this.ui.tutNext)) {
+          sound.click();
+          this.tutorialActive = false;
+          this.tutorialStep = 0;
+          this.startRun("classic");
+        } else if (this.ui.tutBack && pointInRect(x, y, this.ui.tutBack)) {
+          sound.click();
+          this.endTutorial();
+        }
+        return;
+      }
+      // "Skip tutorial" is available throughout; other clicks fall through to
+      // the normal play/shop handlers so the player can actually do the steps.
+      if (this.ui.tutSkip && pointInRect(x, y, this.ui.tutSkip)) {
+        sound.click();
+        this.endTutorial();
+        return;
+      }
+    }
+
     switch (this.screen) {
       case "title":
-        if (this.tutorialPage !== null) {
-          this.onTutorialPointerDown(x, y);
-          return;
-        }
         if (this.ui.classicBtn && pointInRect(x, y, this.ui.classicBtn)) {
           sound.click();
           this.startRun("classic");
@@ -172,7 +194,7 @@ export class App {
           this.startRun("functions");
         } else if (this.ui.tutorialBtn && pointInRect(x, y, this.ui.tutorialBtn)) {
           sound.click();
-          this.tutorialPage = 0;
+          this.startTutorial();
         } else if (this.ui.helpBtn && pointInRect(x, y, this.ui.helpBtn)) {
           this.showHelp = !this.showHelp;
           sound.click();
@@ -498,6 +520,9 @@ export class App {
 
   private beginEvaluate(): void {
     if (this.screen !== "playing") return;
+    // In the tutorial you can't lose to an early evaluate — ignore it until the
+    // scripted tree actually reaches the target.
+    if (this.tutorialActive && this.game.currentScore < this.game.target) return;
     sound.click();
     this.evalAnim = new EvaluateAnimation(this.game.root);
     const tree = treeToString(this.game.root);
@@ -623,9 +648,6 @@ export class App {
     if (this.showHelp) {
       this.drawRulesPanel();
     }
-    if (this.tutorialPage !== null) {
-      this.drawTutorial();
-    }
     r.text("v0.1 · built overnight 🌙", cx, r.height - 24, {
       size: 12,
       color: "rgba(234,240,255,0.4)",
@@ -698,71 +720,136 @@ export class App {
     });
   }
 
-  // --- tutorial ---------------------------------------------------------------
+  // --- interactive tutorial ---------------------------------------------------
 
-  /** Draw the paged tutorial overlay and register its Back/Next/Skip buttons. */
-  private drawTutorial(): void {
-    const r = this.renderer;
-    const page = TUTORIAL_PAGES[this.tutorialPage ?? 0];
-    const last = this.tutorialPage === TUTORIAL_PAGES.length - 1;
-
-    const w = Math.min(560, r.width * 0.92);
-    const h = Math.min(r.height * 0.9, 220 + page.body.length * 26);
-    const rect: Rect = { x: (r.width - w) / 2, y: (r.height - h) / 2, w, h };
-    r.drawDimmer(0.62);
-    r.drawPanel(rect);
-
-    r.text(page.title, rect.x + rect.w / 2, rect.y + 46, { size: 24, weight: 800, color: "#8fe4ff" });
-    let y = rect.y + 92;
-    for (const line of page.body) {
-      r.text(line, rect.x + 28, y, { size: 15, align: "left", color: "rgba(234,240,255,0.9)" });
-      y += 26;
-    }
-    r.text(
-      `${(this.tutorialPage ?? 0) + 1} / ${TUTORIAL_PAGES.length}`,
-      rect.x + rect.w / 2,
-      rect.y + h - 62,
-      { size: 12, color: "rgba(234,240,255,0.5)" },
-    );
-
-    // Nav row.
-    const by = rect.y + h - 48;
-    const bw2 = 120;
-    const back: Rect = { x: rect.x + 24, y: by, w: bw2, h: 40 };
-    if ((this.tutorialPage ?? 0) > 0) {
-      r.drawButton(back, "‹ Back");
-      this.ui.tutBack = back;
-    } else {
-      this.ui.tutBack = undefined;
-    }
-    const skip: Rect = { x: rect.x + rect.w / 2 - bw2 / 2, y: by, w: bw2, h: 40 };
-    r.drawButton(skip, "Skip");
-    this.ui.tutSkip = skip;
-    const next: Rect = { x: rect.x + rect.w - 24 - bw2, y: by, w: bw2, h: 40 };
-    r.drawButton(next, last ? "Play ▶" : "Next ›", { primary: true, time: this.time });
-    this.ui.tutNext = next;
+  /** Begin the guided tutorial on a tiny scripted deck (2, 2, ×) → target 4. */
+  private startTutorial(): void {
+    this.game = new Game(configForMode("classic"));
+    this.game.startRun([numberCard(2), numberCard(2), opCard("*")]);
+    this.tutorialActive = true;
+    this.tutorialStep = 0;
+    this.screen = "playing";
+    this.hintShown = false;
   }
 
-  private onTutorialPointerDown(x: number, y: number): void {
-    if (this.ui.tutBack && pointInRect(x, y, this.ui.tutBack)) {
-      sound.click();
-      this.tutorialPage = Math.max(0, (this.tutorialPage ?? 0) - 1);
+  private endTutorial(): void {
+    this.tutorialActive = false;
+    this.tutorialStep = 0;
+    this.showHelp = false;
+    this.showDeck = false;
+    this.screen = "title";
+  }
+
+  /** Instruction + completion predicate for a guided step. */
+  private tutorialStepInfo(step: number): { text: string; done: boolean } {
+    const g = this.game;
+    switch (step) {
+      case 0:
+        return {
+          text: "Goal: reach the target of 4.  Drag a 2 onto the glowing bubble.",
+          done: g.root.type !== "slot",
+        };
+      case 1:
+        return {
+          text: "Now multiply — drag the × card onto your 2.",
+          done: g.root.type === "op",
+        };
+      case 2:
+        return {
+          text: "See it? × by an empty (0) bubble is 0. Drag the last 2 into it.",
+          done: g.currentScore >= g.target,
+        };
+      case 3:
+        return {
+          text: "2 × 2 = 4 — exactly the target! Press Evaluate ✓ (top right).",
+          done: this.screen === "shop",
+        };
+      case 4:
+        return {
+          text: "Cleared! An exact landing banked +5 ◆ focus. Take an upgrade or Skip ◆ to continue.",
+          done: g.round >= 2,
+        };
+      default:
+        return { text: "", done: true };
+    }
+  }
+
+  /**
+   * Advance guided steps and draw the current instruction banner + Skip button.
+   * Called each frame from the playing and shop screens while the tutorial runs.
+   */
+  private tutorialTick(): void {
+    if (!this.tutorialActive) return;
+    // Advance past any completed steps (predicates are monotonic per step).
+    while (this.tutorialStep < 5 && this.tutorialStepInfo(this.tutorialStep).done) {
+      this.tutorialStep += 1;
+    }
+    if (this.tutorialStep >= 5) {
+      this.drawTutorialOutro();
       return;
     }
-    if (this.ui.tutSkip && pointInRect(x, y, this.ui.tutSkip)) {
-      sound.click();
-      this.tutorialPage = null;
-      return;
+    this.drawTutorialBanner(this.tutorialStepInfo(this.tutorialStep).text);
+    this.drawTutorialSkip();
+  }
+
+  private drawTutorialBanner(text: string): void {
+    const r = this.renderer;
+    const w = Math.min(560, r.width - 24);
+    const h = 52;
+    const x = (r.width - w) / 2;
+    // Sit just below the top control row so it never covers the Evaluate button.
+    const y = r.hudHeight + 58;
+    const ctx = r.ctx;
+    ctx.save();
+    ctx.fillStyle = "rgba(20,26,60,0.94)";
+    ctx.strokeStyle = "rgba(143,228,255,0.7)";
+    ctx.lineWidth = 1.5;
+    ctx.shadowColor = "rgba(0,0,0,0.5)";
+    ctx.shadowBlur = 14;
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, 12);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.stroke();
+    ctx.restore();
+    this.wrapText(text, x + w / 2, y + h / 2 - 6, w - 28, 14);
+  }
+
+  private drawTutorialSkip(): void {
+    const r = this.renderer;
+    const rect: Rect = { x: r.width - 132, y: r.height - 40, w: 120, h: 30 };
+    r.drawButton(rect, "Skip tutorial ✕");
+    this.ui.tutSkip = rect;
+    this.ui.tutNext = undefined;
+    this.ui.tutBack = undefined;
+  }
+
+  private drawTutorialOutro(): void {
+    const r = this.renderer;
+    r.drawDimmer(0.62);
+    const w = Math.min(500, r.width * 0.9);
+    const h = 268;
+    const rect: Rect = { x: (r.width - w) / 2, y: (r.height - h) / 2, w, h };
+    r.drawPanel(rect);
+    const cx = rect.x + rect.w / 2;
+    r.text("You've got the loop! 🎉", cx, rect.y + 42, { size: 24, weight: 800, color: "#7CF29B" });
+    const lines = [
+      "Build toward the target, land CLOSE to bank ◆ focus,",
+      "then spend focus to grow your tree and keep scaling.",
+      "That's the whole game — ready for a real run?",
+    ];
+    let y = rect.y + 84;
+    for (const line of lines) {
+      r.text(line, cx, y, { size: 14, color: "rgba(234,240,255,0.9)" });
+      y += 24;
     }
-    if (this.ui.tutNext && pointInRect(x, y, this.ui.tutNext)) {
-      sound.click();
-      if (this.tutorialPage === TUTORIAL_PAGES.length - 1) {
-        this.tutorialPage = null;
-        this.startRun("classic");
-      } else {
-        this.tutorialPage = (this.tutorialPage ?? 0) + 1;
-      }
-    }
+    const play: Rect = { x: cx - 150, y: rect.y + h - 96, w: 300, h: 48 };
+    r.drawButton(play, "▶  Play a real run", { primary: true, time: this.time });
+    this.ui.tutNext = play;
+    const back: Rect = { x: cx - 150, y: rect.y + h - 40, w: 300, h: 34 };
+    r.drawButton(back, "Back to title");
+    this.ui.tutBack = back;
+    this.ui.tutSkip = undefined;
   }
 
   private drawPlaying(dt: number, background = false): void {
@@ -809,6 +896,7 @@ export class App {
       this.drawPlayControls();
       this.drawDepthBeamCue(dt);
       this.drawHintMaybe();
+      this.tutorialTick();
     }
 
     // Dragged card on top.
@@ -1106,6 +1194,9 @@ export class App {
     // mute still available
     const { muteRect } = this.peekMute();
     this.ui.muteRect = muteRect;
+
+    // Tutorial guidance overlays the shop for the final scripted step.
+    this.tutorialTick();
   }
 
   private drawShopOption(
@@ -1310,81 +1401,6 @@ export class App {
   }
 }
 
-/** Paged onboarding tutorial shown from the title screen. */
-const TUTORIAL_PAGES: ReadonlyArray<{ title: string; body: string[] }> = [
-  {
-    title: "The goal",
-    body: [
-      "Build an arithmetic tree whose value reaches",
-      "the round's TARGET score.",
-      "",
-      "Clear the target to advance to the next round.",
-      "Fall short and the run ends — so aim carefully.",
-    ],
-  },
-  {
-    title: "Playing a turn",
-    body: [
-      "Each turn you draw 5 cards and play just ONE;",
-      "the rest shuffle back into your deck.",
-      "",
-      "• Number cards fill an empty 0-slot.",
-      "• + and × cards split a number into (number ○ 0),",
-      "   sprouting a fresh 0 for you to fill next.",
-      "",
-      "Each operator bubble shows its subtree's value,",
-      "so you can watch your score take shape.",
-    ],
-  },
-  {
-    title: "Watch the ×0 trap",
-    body: [
-      "Multiplying by an unfilled 0 zeroes the whole",
-      "branch! Fill your slots before you evaluate.",
-      "",
-      "Out of useful cards? Re-draw your hand:",
-      "free when you're stuck, or a small ◆ cost to",
-      "'fish' for a card you need (like a ×).",
-    ],
-  },
-  {
-    title: "Precision = focus",
-    body: [
-      "You don't just want a BIG number — you want to",
-      "land JUST above the target. The tighter you land,",
-      "the more ◆ focus you bank:",
-      "",
-      "   PERFECT +5   SHARP +4   CLOSE +3",
-      "   NEAR +2   LOOSE +1   overshoot a lot +0",
-      "",
-      "Overshooting wins the round but banks nothing.",
-    ],
-  },
-  {
-    title: "Spending focus",
-    body: [
-      "Between rounds, one action — spend ◆ focus to:",
-      "",
-      "• GROW your tree one level deeper (more numbers),",
-      "• RE-ROLL the shop offers,",
-      "• or take a card upgrade — or SKIP for +1 ◆.",
-      "",
-      "Growing the tree is how you keep scaling as the",
-      "targets climb. Precise landings pay for it.",
-    ],
-  },
-  {
-    title: "That's it — go!",
-    body: [
-      "Targets keep rising. See how far you can go.",
-      "",
-      "Watch the score / target at the top, and aim to",
-      "land close for maximum focus.",
-      "",
-      "Good luck!",
-    ],
-  },
-];
 
 /** Accent colour for a card glyph in the shop (mirrors the bubble palette). */
 function shopGlyphColor(card: Card): string {
