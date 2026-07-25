@@ -12,6 +12,18 @@
 #
 # The game is published to the `number-go-up/` subfolder of that repo, served at
 # https://nkohen.github.io/number-go-up/.
+#
+# Behavior:
+#   - Fails fast (set -euo pipefail): a failed typecheck/build aborts before
+#     anything is copied or committed, so a broken build is never published.
+#   - Replaces the number-go-up/ subfolder wholesale so old hashed JS/CSS assets
+#     never linger, and stages ONLY that subfolder — unrelated changes elsewhere
+#     in the website repo are left untouched.
+#   - No-ops cleanly (no empty commit) when the built output is unchanged.
+#
+# If the push is rejected, the website repo is behind its remote (e.g. edited
+# elsewhere): run `git pull` in it, then re-run this script. The freshly built
+# files are already staged, so re-running just finishes the commit + push.
 
 set -euo pipefail
 
