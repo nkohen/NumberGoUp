@@ -99,6 +99,12 @@ export class Renderer {
   private bubbles = new Map<NodeId, BubbleView>();
   private particles: Particle[] = [];
   private lastNodeCircles: NodeCircle[] = [];
+  /**
+   * While the evaluate/merge animation runs, the on-screen position the root
+   * bubble has been zoomed/recentered to (null otherwise). The app emits the
+   * final particle burst here so it lands on the bubble, not its layout slot.
+   */
+  lastEvalRootScreen: { x: number; y: number } | null = null;
 
   // True once every bubble has finished spawning and eased onto its target.
   // Drives render-on-demand: while false, the app must keep painting.
@@ -340,6 +346,37 @@ export class Renderer {
     const posOf = (id: NodeId): { x: number; y: number } =>
       (opts.evalAnim ? merge.get(id) : this.bubbles.get(id)) ?? this.bubbles.get(id)!;
 
+    // Merge "camera": as the tree collapses, zoom in and recenter on the root —
+    // the inverse of how the layout shrinks + repositions as the tree grows —
+    // so it ends as a single bubble centered in the tree area. The zoom is
+    // pivoted on the root (everything merges *into* it), applied as a canvas
+    // transform over the whole tree so positions, radii, glow and text all
+    // scale together.
+    this.lastEvalRootScreen = null;
+    let cameraApplied = false;
+    if (opts.evalAnim) {
+      const rootC = circles.find((c) => c.id === root.id);
+      if (rootC) {
+        const p = easeInOutCubic(opts.evalAnim.progress);
+        const rect = this.treeRect;
+        const cx = rect.x + rect.w / 2;
+        const cy = rect.y + rect.h / 2;
+        // Grow the root toward a single-bubble size (the 46px layout cap),
+        // clamped so a wide tree doesn't zoom so far its branches fly off before
+        // they've merged.
+        const finalScale = Math.max(1, Math.min(2.2, 46 / rootC.r));
+        const scale = lerp(1, finalScale, p);
+        const px = lerp(rootC.x, cx, p);
+        const py = lerp(rootC.y, cy, p);
+        this.ctx.save();
+        // screen = (world - rootWorld) * scale + pivot
+        this.ctx.translate(px - rootC.x * scale, py - rootC.y * scale);
+        this.ctx.scale(scale, scale);
+        cameraApplied = true;
+        this.lastEvalRootScreen = { x: px, y: py };
+      }
+    }
+
     // Edges first (under bubbles).
     this.ctx.lineCap = "round";
     for (const c of circles) {
@@ -402,6 +439,8 @@ export class Renderer {
         subValue,
       });
     }
+
+    if (cameraApplied) this.ctx.restore();
 
     this.drawParticles();
     return circles;

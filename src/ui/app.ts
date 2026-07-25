@@ -1646,9 +1646,10 @@ export class App {
         evalAnim: this.evalAnim,
         time: this.time,
       });
-      // Particles at the root when nearly done.
+      // Particles at the root when nearly done — at its zoomed/recentered
+      // on-screen position so the burst lands on the bubble, not its layout slot.
       if (this.evalAnim.progress > 0.98 && !this.rootBurstDone) {
-        const root = circles.find((c) => c.id === g.root.id);
+        const root = r.lastEvalRootScreen ?? circles.find((c) => c.id === g.root.id);
         if (root) r.burst(root.x, root.y, "#8fe4ff", 26, 220);
         this.rootBurstDone = true;
       }
