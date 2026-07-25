@@ -47,7 +47,7 @@ type TutPhase = "play" | "evaluate" | "explain" | "choice" | "outro";
 /** A UI region to ring for the current beat. */
 type TutHighlight =
   | "evaluate" | "options" | "actions" | "option0"
-  | "grow" | "reroll" | "skip" | "redraw";
+  | "grow" | "reroll" | "skip" | "redraw" | "save";
 /** The scripted shop action a "choice" beat performs when clicked. */
 type TutChoice = "upgrade0" | "grow" | "reroll" | "skip";
 interface TutBeat {
@@ -67,7 +67,7 @@ interface TutBeat {
 /** Fixed seed so the tutorial's hand order & shop offers are deterministic. */
 const TUTORIAL_SEED = 42;
 /** Step index of the terminal outro beat. */
-const TUTORIAL_OUTRO = 23;
+const TUTORIAL_OUTRO = 24;
 
 interface DragState {
   handIndex: number;
@@ -888,11 +888,12 @@ export class App {
       "Build an arithmetic tree to reach the target score.",
       "",
       "• Each turn: draw 5 cards, play ONE, the rest go back.",
-      "• Number cards (1,2…) fill empty 0-slots.",
-      "• + and × cards split a number into (number ○ 0),",
-      "   sprouting a fresh 0 to fill.",
-      "• An unfilled × bubble counts as 1 (a + bubble as 0),",
-      "   so fill them in to build the number up.",
+      "• Number cards (1,2…) fill empty bubbles.",
+      "• + and × cards split a number into (number ○ ▢),",
+      "   sprouting a fresh empty bubble to fill.",
+      "• An unfilled bubble counts as its parent's identity:",
+      "   1 under × (so × never zeroes you), 0 under +.",
+      "• Reaching the target scores automatically — no click.",
       "• Re-draw your hand to fish for a card (e.g. a ×) —",
       "   free when stuck, else a small ◆ cost that rises.",
       `• The tree is ${depth} levels deep for now (up to ${2 ** depth} numbers) —`,
@@ -911,7 +912,9 @@ export class App {
       "• Spend ◆ to GROW the tree one level deeper — OR take a",
       "   card upgrade. One action per round, so choose well.",
       "• Re-roll the shop (⟳) with ◆ to fish for a card.",
-      "• Targets keep rising. See how far you can go.",
+      "• 💾 Save writes a save file; runs also autosave, so",
+      "   \"Continue\" on the title resumes where you left off.",
+      "• Targets keep rising — clear round 30 to WIN.",
     ];
     // Only explain the Functions-mode cards when actually playing that mode.
     if (this.game.cfg.mode === "functions") {
@@ -953,9 +956,9 @@ export class App {
   /**
    * Begin the guided tutorial — a continuous 3-round playthrough (FIXED seed) on
    * ONE deck that persists and grows: `[2,2,+,×]` → add a 2 → grow the tree.
-   * Demonstrates numbers, ×, +, the ×0 trap, evaluating, precision/focus,
-   * upgrading, the depth-limit red line, GROWing the tree, re-roll and skip.
-   * Every action is highlighted and input is locked to the scripted move.
+   * Demonstrates numbers, ×, +, the empty-× = 1 rule, saving, evaluating,
+   * precision/focus, upgrading, the depth-limit red line, GROWing the tree,
+   * re-roll and skip. Every action is highlighted and input locked to the move.
    */
   private startTutorial(): void {
     this.game = new Game(configForMode("classic"), TUTORIAL_SEED);
@@ -982,16 +985,16 @@ export class App {
   /** One-shot setup when a beat is first entered (scripted offers / targets). */
   private tutorialEnterStep(step: number): void {
     const g = this.game;
-    if (step === 4) {
+    if (step === 5) {
       // Scripted shop offers so taking #1 deterministically adds a 2.
       g.offers = [
         { type: "add", card: numberCard(2), title: "Add a 2", desc: "Shuffle a 2 card into your deck." },
         { type: "add", card: opCard("+"), title: "Add a +", desc: "Shuffle an add card into your deck." },
         { type: "remove", card: numberCard(2), title: "Remove a 2", desc: "Thin your deck by one 2." },
       ] as Upgrade[];
-    } else if (step === 7) {
+    } else if (step === 8) {
       g.target = 8; // round 2 goal, reachable with (2+2)×2
-    } else if (step === 17) {
+    } else if (step === 18) {
       g.target = 4; // round 3: a quick clear to reach the last shop tools
     }
   }
@@ -1011,76 +1014,79 @@ export class App {
     const ops = () => listNodes(g.root).filter((n) => n.type === "op").length;
     const shop = this.screen === "shop";
     switch (this.tutorialStep) {
-      // --- Round 1: numbers, ×, the empty-× = 1 rule, precision -----------
+      // --- Round 1: numbers, ×, empty-× = 1, saving, precision -----------
       case 0:
         return { phase: "play", done: g.root.type !== "slot", hand: numIdx(), node: slot(),
-          text: "Goal: reach the target of 4.  Drag the highlighted 2 onto the glowing bubble." };
+          text: "Goal: reach the target of 4. Number cards fill empty bubbles — drag the highlighted 2 onto the glowing bubble." };
       case 1:
+        return { phase: "explain", done: false, highlight: "save",
+          text: "Anytime, 💾 Save writes your run to a file — and it autosaves as you play, so \"Continue\" on the title picks up where you left off. Tap to continue." };
+      case 2:
         return { phase: "play", done: g.root.type === "op", hand: mulIdx(), node: value(),
           text: "Now multiply — drag the × card onto your 2." };
-      case 2:
-        return { phase: "play", done: g.currentScore >= g.target, hand: numIdx(), node: slot(),
-          text: "An empty × bubble counts as 1 (2 × 1 = 2). Fill it with the last 2 → 2 × 2 = 4." };
       case 3:
-        return { phase: "evaluate", done: shop, highlight: "evaluate",
-          text: "2 × 2 = 4 — exactly the target! Tap the highlighted Evaluate ✓." };
+        return { phase: "play", done: g.currentScore >= g.target, hand: numIdx(), node: slot(),
+          text: "An empty × bubble counts as 1 (2 × 1 = 2), so it won't zero you. Fill it with the last 2 → 2 × 2 = 4." };
       case 4:
-        return { phase: "explain", done: false, highlight: "options",
-          text: "Cleared! A PERFECT landing banked +5 ◆ focus. These are deck upgrades — tap to continue." };
+        return { phase: "evaluate", done: shop, highlight: "evaluate",
+          text: "2 × 2 = 4 — exactly the target! Tap Evaluate ✓. (In a real run, reaching the target scores automatically.)" };
       case 5:
-        return { phase: "explain", done: false, highlight: "actions",
-          text: "Below you can spend ◆ focus: Grow the tree, Re-roll offers, or Skip for +1 ◆. Tap to continue." };
+        return { phase: "explain", done: false, highlight: "options",
+          text: "PERFECT landing! The closer you land above the target, the more ◆ focus you bank — +5 for exact, down to +0 for a big overshoot. Land BELOW target and the run ends. Tap to continue." };
       case 6:
+        return { phase: "explain", done: false, highlight: "actions",
+          text: "Below you can spend ◆ focus: Grow the tree, Re-roll offers, or Skip for +1 ◆. One shop action per round, so choose well. Tap to continue." };
+      case 7:
         return { phase: "choice", choice: "upgrade0", done: g.round >= 2, highlight: "option0",
           text: "Take an upgrade — tap the highlighted card to add a 2 to your deck." };
       // --- Round 2: addition, the depth-limit RED LINE, then GROW ---------
-      case 7:
+      case 8:
         return { phase: "play", done: g.root.type !== "slot", hand: numIdx(), node: slot(),
           text: "Round 2, same deck + your new card. Build to 8 — drag a 2 onto the bubble." };
-      case 8:
+      case 9:
         return { phase: "play", done: ops() >= 1, hand: mulIdx(), node: value(),
           text: "Drag the × onto your 2." };
-      case 9:
+      case 10:
         return { phase: "play", done: values() >= 2, hand: numIdx(), node: slot(),
           text: "Fill the empty bubble with a 2 → 2 × 2 = 4." };
-      case 10:
-        return { phase: "play", done: ops() >= 2, hand: addIdx(), node: value(),
-          text: "Now ADDITION — drag the + onto one of your 2s." };
       case 11:
-        return { phase: "explain", done: false,
-          text: "See the RED line under the tree? You've hit your depth limit — 2 levels deep. Tap to continue." };
+        return { phase: "play", done: ops() >= 2, hand: addIdx(), node: value(),
+          text: "Now ADDITION — drag the + onto a 2. + adds its two bubbles (an empty + bubble counts as 0)." };
       case 12:
+        return { phase: "explain", done: false,
+          text: "See the RED line under the tree? That's your depth limit — 2 levels deep holds at most 4 numbers. Tap to continue." };
+      case 13:
         return { phase: "play", done: g.currentScore >= g.target, hand: numIdx(), node: slot(),
           text: "Fill the last bubble → (2 + 2) × 2 = 8." };
-      case 13:
+      case 14:
         return { phase: "evaluate", done: shop, highlight: "evaluate",
           text: "(2 + 2) × 2 = 8 — the target! Tap Evaluate ✓." };
-      case 14:
+      case 15:
         return { phase: "explain", done: false, highlight: "grow",
           text: "To fit MORE numbers, spend ◆ focus to GROW the tree deeper — the red line drops. Tap to continue." };
-      case 15:
-        return { phase: "choice", choice: "grow", done: g.round >= 3, highlight: "grow",
-          text: "Tap Grow ↑ to make your tree one level deeper (2 → 3)." };
-      // --- Round 3: room to grow, then Re-roll & Skip --------------------
       case 16:
+        return { phase: "choice", choice: "grow", done: g.round >= 3, highlight: "grow",
+          text: "Tap Grow ↑ to make your tree one level deeper (2 → 3). Growing takes your shop action for the round." };
+      // --- Round 3: room to grow, then Re-roll & Skip --------------------
+      case 17:
         return { phase: "explain", done: false,
           text: "Depth 3 now — the red line is gone, so your tree has room to hold more numbers. Tap to continue." };
-      case 17:
+      case 18:
         return { phase: "play", done: g.root.type !== "slot", hand: numIdx(), node: slot(),
           text: "One quick round to reach the last tools. Drag a 2 onto the bubble." };
-      case 18:
+      case 19:
         return { phase: "play", done: ops() >= 1, hand: mulIdx(), node: value(),
           text: "Drag the × onto your 2." };
-      case 19:
+      case 20:
         return { phase: "play", done: g.currentScore >= g.target, hand: numIdx(), node: slot(),
           text: "Fill it with a 2 → 2 × 2 = 4." };
-      case 20:
+      case 21:
         return { phase: "evaluate", done: shop, highlight: "evaluate",
           text: "Cleared! Tap Evaluate ✓." };
-      case 21:
-        return { phase: "choice", choice: "reroll", done: g.rerollCount >= 1, highlight: "reroll",
-          text: "Re-roll draws a fresh set of offers — tap Re-roll ⟳ to try it." };
       case 22:
+        return { phase: "choice", choice: "reroll", done: g.rerollCount >= 1, highlight: "reroll",
+          text: "Re-roll draws a fresh set of offers for ◆ focus — tap Re-roll ⟳ to try it." };
+      case 23:
         return { phase: "choice", choice: "skip", done: g.round >= 4, highlight: "skip",
           text: "And Skip banks +1 ◆ focus — tap Skip to finish the tutorial." };
       default:
@@ -1207,6 +1213,7 @@ export class App {
       case "reroll": ringBtn(this.ui.shopReroll, "#7CF29B"); break;
       case "skip": ringBtn(this.ui.shopSkip, "#7CF29B"); break;
       case "option0": ringBtn(this.ui.shopOptions[0], "#7CF29B"); break;
+      case "save": ringBtn(this.ui.saveBtn, "#8fe4ff"); break;
       case "options": for (const o of this.ui.shopOptions) this.drawRingRect(o, "#8fe4ff"); break;
       case "actions":
         for (const rr of [this.ui.shopGrow, this.ui.shopReroll, this.ui.shopSkip]) ringBtn(rr, "#8fe4ff");
@@ -1250,7 +1257,12 @@ export class App {
   private drawTutorialBanner(text: string): void {
     const r = this.renderer;
     const w = Math.min(560, r.width - 24);
-    const h = 54;
+    const fontSize = 14;
+    const lineH = fontSize + 4;
+    // Grow the banner to fit however many lines the text wraps to, so longer
+    // rule explanations never spill past the box.
+    const lines = this.wrapLines(text, w - 28, fontSize);
+    const h = Math.max(54, 24 + lines.length * lineH);
     const x = (r.width - w) / 2;
     // Sit just below the top control row so it never covers the Evaluate button.
     const y = r.hudHeight + 58;
@@ -1267,7 +1279,30 @@ export class App {
     ctx.shadowBlur = 0;
     ctx.stroke();
     ctx.restore();
-    this.wrapText(text, x + w / 2, y + h / 2 - 6, w - 28, 14);
+    let ty = y + h / 2 - ((lines.length - 1) * lineH) / 2;
+    for (const line of lines) {
+      r.text(line, x + w / 2, ty, { size: fontSize, color: "rgba(234,240,255,0.9)" });
+      ty += lineH;
+    }
+  }
+
+  /** Greedy word-wrap into lines that fit `maxW` at `size` px. */
+  private wrapLines(text: string, maxW: number, size: number): string[] {
+    const ctx = this.renderer.ctx;
+    ctx.font = `500 ${size}px sans-serif`;
+    const lines: string[] = [];
+    let line = "";
+    for (const word of text.split(" ")) {
+      const test = line ? line + " " + word : word;
+      if (ctx.measureText(test).width > maxW && line) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = test;
+      }
+    }
+    if (line) lines.push(line);
+    return lines;
   }
 
   private drawTutorialSkip(): void {
@@ -1291,7 +1326,7 @@ export class App {
     const lines = [
       "Build toward the target, land CLOSE to bank ◆ focus,",
       "then spend focus to grow your tree and keep scaling.",
-      "That's the whole game — ready for a real run?",
+      "Clear round 30 to WIN. Ready for a real run?",
     ];
     let y = rect.y + 84;
     for (const line of lines) {
@@ -1455,7 +1490,10 @@ export class App {
     } else {
       this.ui.deckBtn = undefined;
     }
-    if (this.ui.saveBtn && !this.tutorialActive) {
+    // Save is hidden during the tutorial too, EXCEPT on the beat that points it
+    // out (so the tutorial can highlight it without letting you actually save).
+    const showSave = !this.tutorialActive || this.tutBeat().highlight === "save";
+    if (this.ui.saveBtn && showSave) {
       r.drawButton(this.ui.saveBtn, "💾 Save");
     } else {
       this.ui.saveBtn = undefined;
