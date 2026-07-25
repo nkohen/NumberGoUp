@@ -44,6 +44,11 @@ interface UiBoxes {
   classicBtn?: Rect;
   functionsBtn?: Rect;
   helpBtn?: Rect;
+  tutorialBtn?: Rect;
+  deckBtn?: Rect;
+  tutBack?: Rect;
+  tutNext?: Rect;
+  tutSkip?: Rect;
   restartBtn?: Rect;
   shopOptions: Rect[];
   shopSkip?: Rect;
@@ -65,6 +70,10 @@ export class App {
   private evalAnim: EvaluateAnimation | null = null;
   private ui: UiBoxes = { handRects: [], nodeCircles: [], shopOptions: [] };
   private showHelp = false;
+  /** True while the in-play deck panel is open. */
+  private showDeck = false;
+  /** Current tutorial page (null = tutorial closed). */
+  private tutorialPage: number | null = null;
   private hintShown = true;
   /** Eased 0..1 intensity of the "depth limit reached" beam. */
   private depthBeam = 0;
@@ -135,6 +144,14 @@ export class App {
     sound.unlock();
     const { x, y } = this.pointerPos(e);
 
+    // The How-to-play / deck overlays dismiss on any click (tap to close).
+    if (this.showHelp || this.showDeck) {
+      this.showHelp = false;
+      this.showDeck = false;
+      sound.click();
+      return;
+    }
+
     // Global: mute button (visible on all screens with a HUD).
     if (this.ui.muteRect && pointInRect(x, y, this.ui.muteRect)) {
       this.toggleMute();
@@ -143,12 +160,19 @@ export class App {
 
     switch (this.screen) {
       case "title":
+        if (this.tutorialPage !== null) {
+          this.onTutorialPointerDown(x, y);
+          return;
+        }
         if (this.ui.classicBtn && pointInRect(x, y, this.ui.classicBtn)) {
           sound.click();
           this.startRun("classic");
         } else if (this.ui.functionsBtn && pointInRect(x, y, this.ui.functionsBtn)) {
           sound.click();
           this.startRun("functions");
+        } else if (this.ui.tutorialBtn && pointInRect(x, y, this.ui.tutorialBtn)) {
+          sound.click();
+          this.tutorialPage = 0;
         } else if (this.ui.helpBtn && pointInRect(x, y, this.ui.helpBtn)) {
           this.showHelp = !this.showHelp;
           sound.click();
@@ -175,9 +199,14 @@ export class App {
   };
 
   private onPlayingPointerDown(x: number, y: number): void {
-    // Help toggle.
+    // Help / deck toggles.
     if (this.ui.helpBtn && pointInRect(x, y, this.ui.helpBtn)) {
       this.showHelp = !this.showHelp;
+      sound.click();
+      return;
+    }
+    if (this.ui.deckBtn && pointInRect(x, y, this.ui.deckBtn)) {
+      this.showDeck = !this.showDeck;
       sound.click();
       return;
     }
@@ -577,16 +606,25 @@ export class App {
     r.text(
       "Functions mode (variable x + evaluate operator) — coming soon",
       cx,
-      y0 + 70 + 78,
+      y0 + 70 + 74,
       { size: 13, color: "rgba(183,155,255,0.6)" },
     );
 
-    const helpBtn: Rect = { x: cx - bw / 2, y: y0 + 156, w: bw, h: 44 };
-    r.drawButton(helpBtn, this.showHelp ? "Hide rules" : "How to play");
+    // Tutorial + How-to-play, side by side.
+    const half = (bw - 12) / 2;
+    const rowY = y0 + 150;
+    const tutorialBtn: Rect = { x: cx - bw / 2, y: rowY, w: half, h: 44 };
+    r.drawButton(tutorialBtn, "📖  Tutorial", { primary: true, time: this.time });
+    this.ui.tutorialBtn = tutorialBtn;
+    const helpBtn: Rect = { x: cx - bw / 2 + half + 12, y: rowY, w: half, h: 44 };
+    r.drawButton(helpBtn, "How to play");
     this.ui.helpBtn = helpBtn;
 
     if (this.showHelp) {
       this.drawRulesPanel();
+    }
+    if (this.tutorialPage !== null) {
+      this.drawTutorial();
     }
     r.text("v0.1 · built overnight 🌙", cx, r.height - 24, {
       size: 12,
@@ -654,10 +692,77 @@ export class App {
       r.text(line, rect.x + 26, y, { size: fontSize, align: "left", color: "rgba(234,240,255,0.85)" });
       y += lineH;
     }
-    r.text("(tap ? again to close)", rect.x + rect.w / 2, rect.y + h - 16, {
+    r.text("(tap anywhere to close)", rect.x + rect.w / 2, rect.y + h - 16, {
       size: 12,
       color: "rgba(234,240,255,0.45)",
     });
+  }
+
+  // --- tutorial ---------------------------------------------------------------
+
+  /** Draw the paged tutorial overlay and register its Back/Next/Skip buttons. */
+  private drawTutorial(): void {
+    const r = this.renderer;
+    const page = TUTORIAL_PAGES[this.tutorialPage ?? 0];
+    const last = this.tutorialPage === TUTORIAL_PAGES.length - 1;
+
+    const w = Math.min(560, r.width * 0.92);
+    const h = Math.min(r.height * 0.9, 220 + page.body.length * 26);
+    const rect: Rect = { x: (r.width - w) / 2, y: (r.height - h) / 2, w, h };
+    r.drawDimmer(0.62);
+    r.drawPanel(rect);
+
+    r.text(page.title, rect.x + rect.w / 2, rect.y + 46, { size: 24, weight: 800, color: "#8fe4ff" });
+    let y = rect.y + 92;
+    for (const line of page.body) {
+      r.text(line, rect.x + 28, y, { size: 15, align: "left", color: "rgba(234,240,255,0.9)" });
+      y += 26;
+    }
+    r.text(
+      `${(this.tutorialPage ?? 0) + 1} / ${TUTORIAL_PAGES.length}`,
+      rect.x + rect.w / 2,
+      rect.y + h - 62,
+      { size: 12, color: "rgba(234,240,255,0.5)" },
+    );
+
+    // Nav row.
+    const by = rect.y + h - 48;
+    const bw2 = 120;
+    const back: Rect = { x: rect.x + 24, y: by, w: bw2, h: 40 };
+    if ((this.tutorialPage ?? 0) > 0) {
+      r.drawButton(back, "‹ Back");
+      this.ui.tutBack = back;
+    } else {
+      this.ui.tutBack = undefined;
+    }
+    const skip: Rect = { x: rect.x + rect.w / 2 - bw2 / 2, y: by, w: bw2, h: 40 };
+    r.drawButton(skip, "Skip");
+    this.ui.tutSkip = skip;
+    const next: Rect = { x: rect.x + rect.w - 24 - bw2, y: by, w: bw2, h: 40 };
+    r.drawButton(next, last ? "Play ▶" : "Next ›", { primary: true, time: this.time });
+    this.ui.tutNext = next;
+  }
+
+  private onTutorialPointerDown(x: number, y: number): void {
+    if (this.ui.tutBack && pointInRect(x, y, this.ui.tutBack)) {
+      sound.click();
+      this.tutorialPage = Math.max(0, (this.tutorialPage ?? 0) - 1);
+      return;
+    }
+    if (this.ui.tutSkip && pointInRect(x, y, this.ui.tutSkip)) {
+      sound.click();
+      this.tutorialPage = null;
+      return;
+    }
+    if (this.ui.tutNext && pointInRect(x, y, this.ui.tutNext)) {
+      sound.click();
+      if (this.tutorialPage === TUTORIAL_PAGES.length - 1) {
+        this.tutorialPage = null;
+        this.startRun("classic");
+      } else {
+        this.tutorialPage = (this.tutorialPage ?? 0) + 1;
+      }
+    }
   }
 
   private drawPlaying(dt: number, background = false): void {
@@ -724,7 +829,9 @@ export class App {
     // hunt for a card (e.g. a ×). Shown whenever a re-draw is possible.
     this.ui.redrawBtn = this.game.canRedraw() ? { x: 12, y, w: 148, h: 44 } : undefined;
 
-    this.ui.helpBtn = { x: 12, y: this.renderer.height - this.renderer.handHeight - 44, w: 40, h: 36 };
+    const btnY = this.renderer.height - this.renderer.handHeight - 44;
+    this.ui.helpBtn = { x: 12, y: btnY, w: 40, h: 36 };
+    this.ui.deckBtn = { x: 58, y: btnY, w: 84, h: 36 };
   }
 
   private drawPlayControls(): void {
@@ -738,13 +845,40 @@ export class App {
     }
     if (this.ui.redrawBtn) {
       const cost = this.game.redrawCost;
-      const label = cost > 0 ? `↻ Redraw  ${cost} ◆` : "↻ Redraw (free)";
+      const label = cost > 0 ? `↻ Redraw  −${cost} ◆` : "↻ Redraw (free)";
       r.drawButton(this.ui.redrawBtn, label);
     }
     if (this.ui.helpBtn) {
       r.drawButton(this.ui.helpBtn, "?");
     }
+    if (this.ui.deckBtn) {
+      r.drawButton(this.ui.deckBtn, "🃏 Deck");
+    }
     if (this.showHelp) this.drawRulesPanel();
+    if (this.showDeck) this.drawDeckPanel();
+  }
+
+  /** Compact overlay listing the current run deck (toggled by the Deck button). */
+  private drawDeckPanel(): void {
+    const r = this.renderer;
+    const tc = this.deckTypeCounts();
+    const detail = this.deckDetailLine();
+    const w = Math.min(560, r.width * 0.92);
+    const h = 200;
+    const rect: Rect = { x: (r.width - w) / 2, y: (r.height - h) / 2, w, h };
+    r.drawDimmer(0.55);
+    r.drawPanel(rect);
+    r.text("Your deck", rect.x + rect.w / 2, rect.y + 40, { size: 22, weight: 800 });
+    r.text(tc.summary, rect.x + rect.w / 2, rect.y + 78, {
+      size: 15,
+      weight: 700,
+      color: "rgba(234,240,255,0.92)",
+    });
+    this.wrapText(detail, rect.x + rect.w / 2, rect.y + 108, rect.w - 40, 14);
+    r.text("(tap anywhere to close)", rect.x + rect.w / 2, rect.y + h - 20, {
+      size: 12,
+      color: "rgba(234,240,255,0.45)",
+    });
   }
 
   /**
@@ -948,7 +1082,7 @@ export class App {
 
     const grow: Rect = { x: bx, y: btnY, w: bw, h: 40 };
     const maxed = g.currentDepth >= MAX_DEPTH;
-    r.drawButton(grow, maxed ? "Tree maxed" : `Grow ↑  ${g.growCost} ◆`, {
+    r.drawButton(grow, maxed ? "Tree maxed" : `Grow ↑  −${g.growCost} ◆`, {
       primary: g.canGrow(),
       enabled: !maxed && g.canGrow(),
       time: this.time,
@@ -957,7 +1091,7 @@ export class App {
     bx += bw + bgap;
 
     const reroll: Rect = { x: bx, y: btnY, w: bw, h: 40 };
-    r.drawButton(reroll, `Re-roll ⟳  ${g.rerollCost} ◆`, {
+    r.drawButton(reroll, `Re-roll ⟳  −${g.rerollCost} ◆`, {
       enabled: g.canReroll(),
     });
     this.ui.shopReroll = reroll;
@@ -1175,6 +1309,82 @@ export class App {
     return sections.join("     ");
   }
 }
+
+/** Paged onboarding tutorial shown from the title screen. */
+const TUTORIAL_PAGES: ReadonlyArray<{ title: string; body: string[] }> = [
+  {
+    title: "The goal",
+    body: [
+      "Build an arithmetic tree whose value reaches",
+      "the round's TARGET score.",
+      "",
+      "Clear the target to advance to the next round.",
+      "Fall short and the run ends — so aim carefully.",
+    ],
+  },
+  {
+    title: "Playing a turn",
+    body: [
+      "Each turn you draw 5 cards and play just ONE;",
+      "the rest shuffle back into your deck.",
+      "",
+      "• Number cards fill an empty 0-slot.",
+      "• + and × cards split a number into (number ○ 0),",
+      "   sprouting a fresh 0 for you to fill next.",
+      "",
+      "Each operator bubble shows its subtree's value,",
+      "so you can watch your score take shape.",
+    ],
+  },
+  {
+    title: "Watch the ×0 trap",
+    body: [
+      "Multiplying by an unfilled 0 zeroes the whole",
+      "branch! Fill your slots before you evaluate.",
+      "",
+      "Out of useful cards? Re-draw your hand:",
+      "free when you're stuck, or a small ◆ cost to",
+      "'fish' for a card you need (like a ×).",
+    ],
+  },
+  {
+    title: "Precision = focus",
+    body: [
+      "You don't just want a BIG number — you want to",
+      "land JUST above the target. The tighter you land,",
+      "the more ◆ focus you bank:",
+      "",
+      "   PERFECT +5   SHARP +4   CLOSE +3",
+      "   NEAR +2   LOOSE +1   overshoot a lot +0",
+      "",
+      "Overshooting wins the round but banks nothing.",
+    ],
+  },
+  {
+    title: "Spending focus",
+    body: [
+      "Between rounds, one action — spend ◆ focus to:",
+      "",
+      "• GROW your tree one level deeper (more numbers),",
+      "• RE-ROLL the shop offers,",
+      "• or take a card upgrade — or SKIP for +1 ◆.",
+      "",
+      "Growing the tree is how you keep scaling as the",
+      "targets climb. Precise landings pay for it.",
+    ],
+  },
+  {
+    title: "That's it — go!",
+    body: [
+      "Targets keep rising. See how far you can go.",
+      "",
+      "Watch the score / target at the top, and aim to",
+      "land close for maximum focus.",
+      "",
+      "Good luck!",
+    ],
+  },
+];
 
 /** Accent colour for a card glyph in the shop (mirrors the bubble palette). */
 function shopGlyphColor(card: Card): string {
