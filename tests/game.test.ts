@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { Game, DEFAULT_CONFIG, targetForRound, gradeLand, costToGrow, MAX_DEPTH } from "../src/core/game";
+import { Game, DEFAULT_CONFIG, targetForRound, gradeLand, costToGrow, MAX_DEPTH, WIN_ROUND } from "../src/core/game";
 import { applyUpgrade, generateOffers } from "../src/core/upgrades";
 import { starterDeck, numberCard, opCard, cardKey } from "../src/core/cards";
 import { Rng } from "../src/core/rng";
@@ -331,5 +331,28 @@ describe("canProgress (auto-resolve support)", () => {
     g.hand = [numberCard(1)];
     g.roundDeck = [opCard("+")]; // an op can split the value leaf → progress
     expect(g.canProgress()).toBe(true);
+  });
+});
+
+describe("win condition (WIN_ROUND)", () => {
+  const clearAt = (round: number): Game => {
+    const g = new Game(DEFAULT_CONFIG, 1);
+    g.startRun();
+    g.round = round;
+    g.target = 0; // any tree clears
+    g.evaluate();
+    return g;
+  };
+
+  it("clearing WIN_ROUND wins the run (phase 'won')", () => {
+    expect(clearAt(WIN_ROUND).phase).toBe("won");
+  });
+
+  it("clearing an earlier round opens the shop", () => {
+    expect(clearAt(WIN_ROUND - 1).phase).toBe("shop");
+  });
+
+  it("clearing past WIN_ROUND stays in the shop (win fires once)", () => {
+    expect(clearAt(WIN_ROUND + 1).phase).toBe("shop");
   });
 });

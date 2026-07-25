@@ -930,6 +930,11 @@ export class Renderer {
   static particleColor(card: Card): string {
     return colorsForCard(card).a;
   }
+
+  /** Full colour ramp for a card (fill a→b + glow), for glossy bubble draws. */
+  static bubbleStyle(card: Card): { a: string; b: string; glow: string } {
+    return colorsForCard(card);
+  }
 }
 
 /** Colour ramp for a card by kind (numbers, x, and each operator). */

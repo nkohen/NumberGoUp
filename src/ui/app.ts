@@ -9,7 +9,8 @@
  *   shop       → pick one of three deck upgrades (or skip)
  *   gameover   → run summary + restart
  */
-import { Game, GameConfig, GameMode, LandGrade, gradeLand, configForMode, targetForRound, MAX_DEPTH } from "../core/game";
+import { Game, GameConfig, GameMode, LandGrade, gradeLand, configForMode, targetForRound, MAX_DEPTH, WIN_ROUND } from "../core/game";
+import { VictoryBubbles } from "./victory";
 import { Card, cardLabel, numberCard, opCard } from "../core/cards";
 import type { Upgrade } from "../core/upgrades";
 import { NodeId, legalTargets, hasLegalTarget, listNodes, treeToString, treeHeight, place, evaluate } from "../core/tree";
@@ -39,7 +40,7 @@ import {
   type SaveData,
 } from "./persistence";
 
-type Screen = "title" | "playing" | "evaluating" | "shop" | "gameover";
+type Screen = "title" | "playing" | "evaluating" | "shop" | "gameover" | "won";
 
 /** A single scripted beat of the interactive tutorial. */
 type TutPhase = "play" | "evaluate" | "explain" | "choice" | "outro";
@@ -96,6 +97,7 @@ interface UiBoxes {
   tutNext?: Rect;
   tutSkip?: Rect;
   restartBtn?: Rect;
+  keepPlayingBtn?: Rect;
   shopOptions: Rect[];
   shopSkip?: Rect;
   shopGrow?: Rect;
@@ -133,6 +135,8 @@ export class App {
   private toastUntil = 0;
   /** Cached local autosave presence, refreshed when we enter the title screen. */
   private localSave: SaveData | null = null;
+  /** Bouncing-bubble celebration, live only on the `won` screen. */
+  private victory: VictoryBubbles | null = null;
 
   /** DEV/URL overrides applied on top of the chosen mode's config. */
   private overrideConfig: Partial<GameConfig>;
@@ -255,6 +259,20 @@ export class App {
           this.restart();
         } else if (this.ui.backToTitle && pointInRect(x, y, this.ui.backToTitle)) {
           sound.click();
+          this.localSave = loadLocal();
+          this.screen = "title";
+        }
+        return;
+      case "won":
+        if (this.ui.keepPlayingBtn && pointInRect(x, y, this.ui.keepPlayingBtn)) {
+          sound.click();
+          this.keepPlaying();
+        } else if (this.ui.restartBtn && pointInRect(x, y, this.ui.restartBtn)) {
+          sound.click();
+          this.restart();
+        } else if (this.ui.backToTitle && pointInRect(x, y, this.ui.backToTitle)) {
+          sound.click();
+          this.victory = null;
           this.localSave = loadLocal();
           this.screen = "title";
         }
@@ -530,6 +548,7 @@ export class App {
   }
 
   private restart(): void {
+    this.victory = null;
     this.game = this.makeGame(this.game.cfg.mode);
     this.game.startRun();
     this.screen = "playing";
@@ -752,6 +771,10 @@ export class App {
       case "gameover":
         this.drawPlaying(dt, true);
         this.drawGameOver();
+        break;
+      case "won":
+        this.drawPlaying(dt, true);
+        this.drawVictory(dt);
         break;
     }
     this.drawToast();
@@ -1536,14 +1559,17 @@ export class App {
     this.ui.muteRect = muteRect;
 
     if (this.evalAnim && this.evalAnim.done) {
-      const won = this.game.lastResult?.won ?? false;
       this.evalAnim = null;
       this.rootBurstDone = false;
-      if (won) {
+      if (this.game.phase === "won") {
+        // Beat the final round — win the run with a bubble celebration.
         sound.win();
-        this.screen = "shop";
-        this.autosave();
-      } else {
+        this.startVictory();
+        this.screen = "won";
+        clearLocal();
+        void clearBoundFile();
+        this.localSave = null;
+      } else if (this.game.phase === "gameover") {
         sound.lose();
         this.screen = "gameover";
         // The run is over — drop the autosave (and empty the bound save file) so
@@ -1551,6 +1577,10 @@ export class App {
         clearLocal();
         void clearBoundFile();
         this.localSave = null;
+      } else {
+        sound.win();
+        this.screen = "shop";
+        this.autosave();
       }
     }
   }
@@ -1804,6 +1834,62 @@ export class App {
     r.drawButton(restart, "↻  Play again", { primary: true, time: this.time });
     this.ui.restartBtn = restart;
     const back: Rect = { x: r.width / 2 - 110, y: panel.y + h - 36, w: 220, h: 30 };
+    r.drawButton(back, "Back to title");
+    this.ui.backToTitle = back;
+
+    const { muteRect } = this.peekMute();
+    this.ui.muteRect = muteRect;
+  }
+
+  /** Kick off the win celebration: a bubble sprayed from the deck per card. */
+  private startVictory(): void {
+    const r = this.renderer;
+    // Spray from the deck's home — bottom-centre, where the hand/deck sit.
+    this.victory = new VictoryBubbles(
+      this.game.deck,
+      r.width / 2,
+      r.height - r.handHeight * 0.5,
+    );
+  }
+
+  /** From the win screen, resume the endless run by reopening the shop. */
+  private keepPlaying(): void {
+    this.game.phase = "shop"; // offers were generated on the winning evaluate
+    this.victory = null;
+    this.screen = "shop";
+    this.autosave();
+  }
+
+  private drawVictory(dt: number): void {
+    const r = this.renderer;
+    const g = this.game;
+    r.drawDimmer(0.6);
+    // Bubbles bounce around the whole screen behind the panel.
+    if (this.victory) {
+      this.victory.update(dt, r.width, r.height, r.hudHeight);
+      this.victory.draw(r.ctx);
+    }
+
+    const w = Math.min(460, r.width * 0.9);
+    const h = 300;
+    const panel: Rect = { x: (r.width - w) / 2, y: (r.height - h) / 2, w, h };
+    r.drawPanel(panel);
+    r.text("YOU WIN! 🎉", r.width / 2, panel.y + 52, { size: 34, weight: 900, color: "#7cf29b" });
+    r.text(`You beat all ${WIN_ROUND} rounds.`, r.width / 2, panel.y + 100, { size: 18 });
+    r.text(
+      `Best score: ${g.bestScore.toLocaleString()}`,
+      r.width / 2,
+      panel.y + 130,
+      { size: 15, color: "rgba(234,240,255,0.75)" },
+    );
+
+    const keep: Rect = { x: r.width / 2 - 110, y: panel.y + h - 150, w: 220, h: 48 };
+    r.drawButton(keep, "Keep playing →", { primary: true, time: this.time });
+    this.ui.keepPlayingBtn = keep;
+    const restart: Rect = { x: r.width / 2 - 110, y: panel.y + h - 94, w: 220, h: 44 };
+    r.drawButton(restart, "↻  Play again");
+    this.ui.restartBtn = restart;
+    const back: Rect = { x: r.width / 2 - 110, y: panel.y + h - 40, w: 220, h: 30 };
     r.drawButton(back, "Back to title");
     this.ui.backToTitle = back;
 

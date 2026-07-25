@@ -32,7 +32,15 @@ import {
 } from "./tree";
 import { Upgrade, generateOffers, applyUpgrade } from "./upgrades";
 
-export type Phase = "title" | "playing" | "shop" | "gameover";
+export type Phase = "title" | "playing" | "shop" | "gameover" | "won";
+
+/**
+ * Clearing this round wins the run. The game is endless by nature, but the late
+ * game converges on the same "big multiply tree + a small additive tweak" shape,
+ * so round 30 is a satisfying finish line — a milestone win (you can still choose
+ * to keep playing past it).
+ */
+export const WIN_ROUND = 30;
 
 /**
  * Game variants:
@@ -409,7 +417,10 @@ export class Game {
         this.cfg.upgradeChoices,
         this.cfg.mode,
       );
-      this.phase = "shop";
+      // Clearing WIN_ROUND wins the run (fires exactly once — beyond it the
+      // shop resumes so a player can keep going). Offers are still generated so
+      // "Keep playing" can open the shop.
+      this.phase = this.round === WIN_ROUND ? "won" : "shop";
     } else {
       this.phase = "gameover";
     }
