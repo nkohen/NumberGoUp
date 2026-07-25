@@ -5,6 +5,9 @@ dist/
 *.local
 .DS_Store
 
+# Dev-only gameplay logs (written by the vite devLog plugin)
+dev-logs/
+
 # Rust prototype (archived under legacy-rust/)
 /legacy-rust/target/
 /target/

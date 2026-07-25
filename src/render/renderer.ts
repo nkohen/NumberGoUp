@@ -13,7 +13,7 @@
  * is returned from the draw calls so the input layer can test against exactly
  * what was drawn.
  */
-import { TreeNode, NodeId, listNodes } from "../core/tree";
+import { TreeNode, NodeId, listNodes, evaluate } from "../core/tree";
 import { Card, cardLabel } from "../core/cards";
 import { layoutTree } from "./layout";
 import {
@@ -108,10 +108,20 @@ export class Renderer {
 
   resize(): void {
     this.dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const w = this.canvas.clientWidth || window.innerWidth;
-    const h = this.canvas.clientHeight || window.innerHeight;
+    // Size to the *visible* viewport. On mobile browsers `100vh`/innerHeight
+    // refer to the largest possible viewport (with the address bar hidden), so
+    // using them leaves the bottom of the game hidden behind the browser chrome.
+    // `visualViewport` reflects what is actually on screen right now.
+    const vv = window.visualViewport;
+    const w = vv ? vv.width : window.innerWidth;
+    const h = vv ? vv.height : window.innerHeight;
     this.width = w;
     this.height = h;
+    // Pin the canvas's CSS box to those exact dimensions so the backing store,
+    // the CSS size, and pointer hit-testing (getBoundingClientRect) all agree —
+    // any mismatch is what makes the game look mis-scaled on a phone.
+    this.canvas.style.width = `${w}px`;
+    this.canvas.style.height = `${h}px`;
     this.canvas.width = Math.floor(w * this.dpr);
     this.canvas.height = Math.floor(h * this.dpr);
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
@@ -264,7 +274,7 @@ export class Renderer {
         const st = opts.evalAnim.stateFor(c.id);
         // Reveal aggregate value; shrink as absorbed into parent.
         if (st.reveal > 0) {
-          label = String(st.value);
+          label = compactNumber(st.value);
           showValue = true;
         }
         const absorbScale = 1 - 0.85 * st.absorb;
@@ -276,6 +286,14 @@ export class Renderer {
         }
       }
 
+      // While building (not during the merge animation), annotate each operator
+      // bubble with the live value of its subtree, so the player can see what
+      // makes up the score. Leaves already show their own number.
+      let subValue: number | undefined;
+      if (!opts.evalAnim && c.node.type === "op") {
+        subValue = evaluate(c.node);
+      }
+
       const isTarget = opts.legalTargets?.has(c.id) ?? false;
       const isHover = opts.hoverId === c.id;
       this.drawBubble(bv.x, bv.y, r, c.node, label, {
@@ -284,6 +302,7 @@ export class Renderer {
         hover: isHover,
         time: opts.time,
         forceValue: showValue,
+        subValue,
       });
     }
 
@@ -359,6 +378,7 @@ export class Renderer {
       hover?: boolean;
       time?: number;
       forceValue?: boolean;
+      subValue?: number;
     } = {},
   ): void {
     const ctx = this.ctx;
@@ -431,15 +451,40 @@ export class Renderer {
       ctx.stroke();
     }
 
-    // Label
+    // Label — nudged up a touch when a subtree value is shown beneath it.
+    const hasSub = opts.subValue !== undefined;
     ctx.globalAlpha = alpha;
     ctx.fillStyle = isSlot ? THEME.textDim : "#0b1026";
     if (!isSlot) ctx.fillStyle = "rgba(10,16,38,0.92)";
-    const fontSize = Math.max(12, r * (label.length > 2 ? 0.8 : 1.05));
+    // Start from a size based on the label length, then shrink to fit within the
+    // bubble so large evaluated numbers never spill outside the circle.
+    let fontSize = Math.max(12, r * (label.length > 2 ? 0.8 : 1.05));
+    if (hasSub) fontSize *= 0.82;
     ctx.font = `700 ${fontSize}px ${FONT}`;
+    const maxW = r * 1.68; // usable inner width (chord well inside the circle)
+    const measured = ctx.measureText(label).width;
+    if (measured > maxW) {
+      fontSize = Math.max(7, fontSize * (maxW / measured));
+      ctx.font = `700 ${fontSize}px ${FONT}`;
+    }
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(label, x, y + 1);
+    ctx.fillText(label, x, hasSub ? y - r * 0.28 : y + 1);
+
+    // Subtree value: small and semi-transparent, beneath the operator glyph.
+    if (hasSub) {
+      const vs = compactNumber(opts.subValue!);
+      let vfont = Math.max(8, r * 0.42);
+      ctx.font = `700 ${vfont}px ${FONT}`;
+      const vw = ctx.measureText(vs).width;
+      if (vw > maxW) {
+        vfont = Math.max(6, vfont * (maxW / vw));
+        ctx.font = `700 ${vfont}px ${FONT}`;
+      }
+      ctx.globalAlpha = alpha * 0.5;
+      ctx.fillStyle = "rgba(10,16,38,0.95)";
+      ctx.fillText(vs, x, y + r * 0.42);
+    }
     ctx.restore();
   }
 
@@ -451,12 +496,22 @@ export class Renderer {
   ): HandCardRect[] {
     const ctx = this.ctx;
     const areaTop = this.height - this.handHeight;
-    const cardH = Math.min(this.handHeight * 0.72, 120);
-    const cardW = cardH * 0.72;
-    const gap = Math.min(18, cardW * 0.22);
     const n = hand.length;
-    const totalW = n * cardW + (n - 1) * gap;
-    let startX = (this.width - totalW) / 2;
+    let cardH = Math.min(this.handHeight * 0.72, 120);
+    let cardW = cardH * 0.72;
+    let gap = Math.min(18, cardW * 0.22);
+    let totalW = n * cardW + (n - 1) * gap;
+    // On narrow (mobile) screens the full-size hand overflows both edges. Scale
+    // the whole row down uniformly so every card fits within the viewport.
+    const maxRowW = this.width - 24;
+    if (totalW > maxRowW && totalW > 0) {
+      const s = maxRowW / totalW;
+      cardW *= s;
+      cardH *= s;
+      gap *= s;
+      totalW = maxRowW;
+    }
+    const startX = (this.width - totalW) / 2;
     const y = areaTop + (this.handHeight - cardH) / 2 + 6;
 
     // hand shelf
@@ -568,6 +623,9 @@ export class Renderer {
     deckRemaining: number;
     deckTotal: number;
     muted: boolean;
+    depth?: number;
+    maxDepth?: number;
+    focus?: number;
   }): { muteRect: Rect } {
     const ctx = this.ctx;
     const h = this.hudHeight;
@@ -575,21 +633,54 @@ export class Renderer {
     ctx.fillRect(0, 0, this.width, h);
 
     const pad = 18;
-    // Left: round
+    // Left: round, then the current tree-depth cap.
     this.drawStat(pad, h / 2, "ROUND", String(info.round), "left");
-    // Center: score / target with progress
+    if (info.depth !== undefined) {
+      this.drawStat(pad + 66, h / 2, "DEPTH", String(info.depth), "left");
+    }
+    // Right cluster: mute button, then DECK, then FOCUS — laid out from the
+    // right edge with measured widths so they never overlap the centered score
+    // on a narrow (mobile) screen.
+    const muteRect: Rect = { x: this.width - 46, y: h / 2 - 16, w: 32, h: 32 };
+    this.drawIconButton(muteRect, info.muted ? "🔇" : "🔊");
+    let rightCursor = muteRect.x - 12;
+    const deckW = this.drawStat(
+      rightCursor,
+      h / 2,
+      "DECK",
+      `${info.deckRemaining}/${info.deckTotal}`,
+      "right",
+    );
+    rightCursor -= deckW + 16;
+    let focusLeft = rightCursor; // left edge of the right cluster's stats
+    if (info.focus !== undefined) {
+      const focusW = this.drawStat(
+        rightCursor,
+        h / 2,
+        "FOCUS",
+        `◆ ${Number.isInteger(info.focus) ? info.focus : info.focus.toFixed(1)}`,
+        "right",
+      );
+      focusLeft = rightCursor - focusW;
+    }
+
+    // Center: score / target with progress. Constrain the centered text to the
+    // gap between the left cluster (ROUND/DEPTH) and the right cluster so a large
+    // score can't render under either on a narrow screen.
     const midX = this.width / 2;
+    const leftEnd = pad + 120; // right edge of the ROUND/DEPTH cluster
+    const centerMaxW = Math.max(40, 2 * Math.min(midX - leftEnd, focusLeft - midX));
     const reached = info.score >= info.target;
     ctx.fillStyle = reached ? THEME.accent : THEME.text;
     ctx.font = `800 ${Math.min(34, h * 0.42)}px ${FONT}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "alphabetic";
-    ctx.fillText(`${info.score}`, midX, h * 0.5);
+    ctx.fillText(groupNumber(info.score), midX, h * 0.5, centerMaxW);
     ctx.fillStyle = THEME.textDim;
     ctx.font = `600 ${Math.min(15, h * 0.2)}px ${FONT}`;
-    ctx.fillText(`/ ${info.target} to clear`, midX, h * 0.74);
+    ctx.fillText(`/ ${groupNumber(info.target)} to clear`, midX, h * 0.74, centerMaxW);
     ctx.font = `600 ${Math.min(12, h * 0.16)}px ${FONT}`;
-    ctx.fillText("SCORE", midX, h * 0.24);
+    ctx.fillText("SCORE", midX, h * 0.24, centerMaxW);
 
     // progress bar under center
     const barW = Math.min(280, this.width * 0.4);
@@ -603,23 +694,23 @@ export class Renderer {
     roundRect(ctx, barX, barY, barW * frac, 4, 2);
     ctx.fill();
 
-    // Right: deck + mute
-    this.drawStat(this.width - pad - 70, h / 2, "DECK", `${info.deckRemaining}/${info.deckTotal}`, "right");
-    const muteRect: Rect = { x: this.width - 46, y: h / 2 - 16, w: 32, h: 32 };
-    this.drawIconButton(muteRect, info.muted ? "🔇" : "🔊");
     return { muteRect };
   }
 
-  private drawStat(x: number, cy: number, label: string, value: string, align: CanvasTextAlign): void {
+  /** Draws a label + value stat and returns the block's rendered width. */
+  private drawStat(x: number, cy: number, label: string, value: string, align: CanvasTextAlign): number {
     const ctx = this.ctx;
     ctx.textAlign = align;
     ctx.fillStyle = THEME.textDim;
     ctx.font = `600 12px ${FONT}`;
     ctx.textBaseline = "alphabetic";
     ctx.fillText(label, x, cy - 6);
+    const labelW = ctx.measureText(label).width;
     ctx.fillStyle = THEME.text;
     ctx.font = `800 22px ${FONT}`;
     ctx.fillText(value, x, cy + 16);
+    const valueW = ctx.measureText(value).width;
+    return Math.max(labelW, valueW);
   }
 
   private drawIconButton(rect: Rect, glyph: string): void {
@@ -692,7 +783,8 @@ export class Renderer {
     ctx.font = `700 ${Math.min(20, rect.h * 0.4)}px ${FONT}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2 + 1);
+    // Clamp to the button width so labels never spill on narrow (mobile) layouts.
+    ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2 + 1, rect.w - 14);
     ctx.restore();
   }
 
@@ -700,14 +792,15 @@ export class Renderer {
     str: string,
     x: number,
     y: number,
-    opts: { size?: number; color?: string; align?: CanvasTextAlign; weight?: number } = {},
+    opts: { size?: number; color?: string; align?: CanvasTextAlign; weight?: number; maxWidth?: number } = {},
   ): void {
     const ctx = this.ctx;
     ctx.fillStyle = opts.color ?? THEME.text;
     ctx.font = `${opts.weight ?? 600} ${opts.size ?? 18}px ${FONT}`;
     ctx.textAlign = opts.align ?? "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(str, x, y);
+    if (opts.maxWidth !== undefined) ctx.fillText(str, x, y, opts.maxWidth);
+    else ctx.fillText(str, x, y);
   }
 
   /** Big glowing title bubble text. */
@@ -730,6 +823,49 @@ export class Renderer {
   /** Draw a card mid-drag, centered on the pointer. */
   drawDraggedCard(card: Card, x: number, y: number, w: number, h: number): void {
     this.drawCard(x - w / 2, y - h / 2, w, h, card, { scale: 1.1 });
+  }
+
+  /**
+   * A glowing red beam spanning the bottom of the tree area, shown when the tree
+   * has hit its depth cap. `intensity` (0..1) fades it in/out; `time` drives a
+   * subtle pulse so it reads as a live "limit reached" warning.
+   */
+  drawDepthBeam(time: number, intensity: number, yOverride?: number): void {
+    if (intensity <= 0.01) return;
+    const ctx = this.ctx;
+    const rect = this.treeRect;
+    // Sit just below the lowest bubble when a position is provided, so the beam
+    // reads as a floor under the tree rather than cutting through the bottom row.
+    const y = yOverride ?? rect.y + rect.h + 4;
+    const x0 = rect.x;
+    const x1 = rect.x + rect.w;
+    const pulse = 0.75 + 0.25 * Math.sin(time * 5);
+    ctx.save();
+    ctx.globalAlpha = intensity;
+    // Soft wide glow band behind the crisp line.
+    const band = ctx.createLinearGradient(0, y - 10, 0, y + 10);
+    band.addColorStop(0, "rgba(255,60,80,0)");
+    band.addColorStop(0.5, `rgba(255,60,80,${0.22 * pulse})`);
+    band.addColorStop(1, "rgba(255,60,80,0)");
+    ctx.fillStyle = band;
+    ctx.fillRect(x0, y - 10, x1 - x0, 20);
+    // Crisp glowing core line.
+    ctx.strokeStyle = `rgba(255,80,100,${0.95 * pulse})`;
+    ctx.lineWidth = 3;
+    ctx.shadowColor = "rgba(255,50,70,0.95)";
+    ctx.shadowBlur = 16 * pulse;
+    ctx.beginPath();
+    ctx.moveTo(x0, y);
+    ctx.lineTo(x1, y);
+    ctx.stroke();
+    // Endpoint nodes for a "beam emitter" feel.
+    ctx.fillStyle = `rgba(255,120,140,${pulse})`;
+    for (const x of [x0, x1]) {
+      ctx.beginPath();
+      ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   }
 
   // --- particles --------------------------------------------------------------
@@ -790,8 +926,50 @@ function colorsForCard(card: Card): { a: string; b: string; glow: string } {
   return THEME.add;
 }
 
+/** Group digits with thousands separators for legibility: 12345 → "12,345". */
+function groupNumber(value: number): string {
+  return Math.round(value).toLocaleString("en-US");
+}
+
+/**
+ * Compact display for large evaluated values so they stay readable on a bubble:
+ * 12345 → "12.3k", 2400000 → "2.4M". Small/exact numbers pass through unchanged.
+ */
+function compactNumber(value: number): string {
+  const abs = Math.abs(value);
+  if (abs < 100000) return String(value);
+  const units: Array<{ n: number; s: string }> = [
+    { n: 1e12, s: "T" },
+    { n: 1e9, s: "B" },
+    { n: 1e6, s: "M" },
+    { n: 1e3, s: "k" },
+  ];
+  for (const u of units) {
+    if (abs >= u.n) {
+      const scaled = value / u.n;
+      const str = scaled >= 100 ? scaled.toFixed(0) : scaled.toFixed(1);
+      return str.replace(/\.0$/, "") + u.s;
+    }
+  }
+  return String(value);
+}
+
+const NUMBER_WORDS = [
+  "ZERO", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT",
+  "NINE", "TEN", "ELEVEN", "TWELVE", "THIRTEEN", "FOURTEEN", "FIFTEEN",
+  "SIXTEEN", "SEVENTEEN", "EIGHTEEN", "NINETEEN", "TWENTY",
+];
+
+/**
+ * The spelled-out name of a number. Beyond the table we return an empty caption
+ * rather than the numeral, which would just duplicate the glyph on the bubble.
+ */
+function numberWord(n: number): string {
+  return NUMBER_WORDS[n] ?? "";
+}
+
 function captionForCard(card: Card): string {
-  if (card.kind === "number") return "NUMBER";
+  if (card.kind === "number") return numberWord(card.value);
   if (card.kind === "var") return "VARIABLE";
   if (card.op === "*") return "MULTIPLY";
   if (card.op === "@") return "EVALUATE";

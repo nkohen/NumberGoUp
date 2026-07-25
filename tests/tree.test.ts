@@ -112,3 +112,46 @@ describe("tree placement & evaluation", () => {
     expect(treeToString(t.root)).toBe(before);
   });
 });
+
+describe("tree-height cap (maxDepth)", () => {
+  // Build the deepest legal chain under a cap of 2 and verify further operators
+  // are refused, while numbers may still fill the remaining slots.
+  it("refuses operators that would exceed maxDepth but still allows numbers", () => {
+    const MAX = 2;
+    let t = newTree();
+    // depth 0 leaf
+    t = place(t, 0, numberCard(2), MAX)!.tree;
+    // op on the depth-0 leaf -> children at depth 1 (allowed)
+    const op1 = place(t, 0, opCard("*"), MAX)!;
+    t = op1.tree;
+    // the original leaf is now at depth 1; an op on it -> depth 2 (allowed)
+    const leftLeaf = listNodes(t.root).find(
+      (n) => n.type === "value" && n.value === 2,
+    )!;
+    const op2 = place(t, leftLeaf.id, opCard("*"), MAX)!;
+    t = op2.tree;
+    // that leaf now sits at depth 2; another op -> depth 3 (refused)
+    const deepLeaf = listNodes(t.root).find(
+      (n) => n.type === "value" && n.value === 2,
+    )!;
+    expect(place(t, deepLeaf.id, opCard("*"), MAX)).toBeNull();
+    expect(legalTargets(t.root, opCard("*"), MAX)).not.toContain(deepLeaf.id);
+    // ...but a number may still fill the deepest open slot.
+    const openSlot = listNodes(t.root).find((n) => n.type === "slot")!;
+    expect(legalTargets(t.root, numberCard(1), MAX)).toContain(openSlot.id);
+    expect(place(t, openSlot.id, numberCard(1), MAX)).not.toBeNull();
+  });
+
+  it("with no cap (default) operators keep nesting arbitrarily deep", () => {
+    let t = newTree();
+    t = place(t, 0, numberCard(1))!.tree;
+    // Six successive operators on the freshly-kept left leaf — all legal uncapped.
+    for (let i = 0; i < 6; i++) {
+      const leaf = listNodes(t.root).find((n) => n.type === "value")!;
+      const res = place(t, leaf.id, opCard("+"));
+      expect(res).not.toBeNull();
+      t = res!.tree;
+    }
+    expect(hasLegalTarget(t.root, opCard("+"))).toBe(true);
+  });
+});

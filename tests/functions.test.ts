@@ -128,7 +128,7 @@ describe("functions game mode", () => {
     for (let i = 0; i < 25 && !g.isHandEmpty; i++) {
       let played = false;
       for (let h = 0; h < g.hand.length; h++) {
-        const targets = legalTargets(g.root, g.hand[h]);
+        const targets = legalTargets(g.root, g.hand[h], g.currentDepth);
         if (targets.length > 0) {
           g.play(h, targets[0]);
           played = true;

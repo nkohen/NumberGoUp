@@ -9,9 +9,9 @@
  *   shop       → pick one of three deck upgrades (or skip)
  *   gameover   → run summary + restart
  */
-import { Game, GameConfig, GameMode, configForMode } from "../core/game";
+import { Game, GameConfig, GameMode, LandGrade, configForMode, targetForRound, MAX_DEPTH } from "../core/game";
 import { Card, cardLabel } from "../core/cards";
-import { NodeId, legalTargets, hasLegalTarget, listNodes, treeToString } from "../core/tree";
+import { NodeId, legalTargets, hasLegalTarget, listNodes, treeToString, treeHeight } from "../core/tree";
 import { sound } from "../audio/sound";
 import {
   Renderer,
@@ -21,6 +21,7 @@ import {
   pointInRect,
 } from "../render/renderer";
 import { EvaluateAnimation } from "../render/animation";
+import { devLog } from "../dev/devlog";
 
 type Screen = "title" | "playing" | "evaluating" | "shop" | "gameover";
 
@@ -46,6 +47,8 @@ interface UiBoxes {
   restartBtn?: Rect;
   shopOptions: Rect[];
   shopSkip?: Rect;
+  shopGrow?: Rect;
+  shopReroll?: Rect;
   backToTitle?: Rect;
 }
 
@@ -63,6 +66,8 @@ export class App {
   private ui: UiBoxes = { handRects: [], nodeCircles: [], shopOptions: [] };
   private showHelp = false;
   private hintShown = true;
+  /** Eased 0..1 intensity of the "depth limit reached" beam. */
+  private depthBeam = 0;
 
   /** DEV/URL overrides applied on top of the chosen mode's config. */
   private overrideConfig: Partial<GameConfig>;
@@ -92,7 +97,13 @@ export class App {
   // --- event wiring -----------------------------------------------------------
 
   private bindEvents(): void {
-    window.addEventListener("resize", () => this.renderer.resize());
+    const onResize = () => this.renderer.resize();
+    window.addEventListener("resize", onResize);
+    window.addEventListener("orientationchange", onResize);
+    // Mobile browsers show/hide the address bar without firing `resize`; the
+    // visual viewport does report those changes, so we track it too.
+    window.visualViewport?.addEventListener("resize", onResize);
+    window.visualViewport?.addEventListener("scroll", onResize);
     const c = this.canvas;
     c.addEventListener("pointerdown", this.onPointerDown);
     c.addEventListener("pointermove", this.onPointerMove);
@@ -110,9 +121,11 @@ export class App {
   }
 
   private onKey = (e: KeyboardEvent): void => {
+    // Enter/space are only used on the title & game-over screens. They are NOT
+    // bound to Evaluate during play — an accidental keypress there could end a
+    // run, so evaluating is deliberately click-only.
     if (e.key === "Enter" || e.key === " ") {
       if (this.screen === "title") this.startRun("classic");
-      else if (this.screen === "playing") this.beginEvaluate();
       else if (this.screen === "gameover") this.restart();
     }
     if (e.key === "m") this.toggleMute();
@@ -174,7 +187,18 @@ export class App {
       return;
     }
     if (this.ui.redrawBtn && pointInRect(x, y, this.ui.redrawBtn)) {
-      if (this.game.redraw()) sound.pickup();
+      const cost = this.game.redrawCost;
+      if (this.game.redraw()) {
+        sound.pickup();
+        devLog("redraw", {
+          round: this.game.round,
+          turn: this.game.turn,
+          cost,
+          paid: cost > 0,
+          focusLeft: this.game.focus,
+          hand: this.game.hand.map((c) => cardLabel(c)),
+        });
+      }
       return;
     }
     // Pick up a hand card.
@@ -190,7 +214,9 @@ export class App {
           startY: y,
           moved: false,
         };
-        this.legalNow = new Set(legalTargets(this.game.root, hr.card));
+        this.legalNow = new Set(
+          legalTargets(this.game.root, hr.card, this.game.currentDepth),
+        );
         sound.pickup();
         return;
       }
@@ -198,17 +224,83 @@ export class App {
   }
 
   private onShopPointerDown(x: number, y: number): void {
+    // Re-roll the offers (spend focus). Stays in the shop — just refreshes the
+    // choices, e.g. when fishing for a specific card.
+    if (this.ui.shopReroll && pointInRect(x, y, this.ui.shopReroll)) {
+      const cost = this.game.rerollCost;
+      if (this.game.rerollOffers()) {
+        sound.click();
+        devLog("reroll", {
+          round: this.game.round,
+          cost,
+          focusLeft: this.game.focus,
+          rerollCount: this.game.rerollCount,
+          offers: this.game.offers.map((o) => o.title),
+        });
+      } else {
+        sound.error();
+      }
+      return;
+    }
+    // Grow the tree (spend focus). This uses up the shop — mutually exclusive
+    // with taking a card upgrade — and advances to the next round.
+    if (this.ui.shopGrow && pointInRect(x, y, this.ui.shopGrow)) {
+      const fromDepth = this.game.currentDepth;
+      const fromRound = this.game.round;
+      const cost = this.game.growCost;
+      if (this.game.growTree()) {
+        sound.upgrade();
+        devLog("grow", {
+          fromRound,
+          fromDepth,
+          toDepth: this.game.currentDepth,
+          cost,
+          focusLeft: this.game.focus,
+          nextRound: this.game.round,
+          nextTarget: this.game.target,
+        });
+        this.logRoundStart();
+        this.screen = "playing";
+      } else {
+        sound.error();
+      }
+      return;
+    }
     for (let i = 0; i < this.ui.shopOptions.length; i++) {
       if (pointInRect(x, y, this.ui.shopOptions[i])) {
         sound.upgrade();
+        const offer = this.game.offers[i];
+        const fromRound = this.game.round;
         this.game.chooseUpgrade(i);
+        devLog("upgrade", {
+          fromRound,
+          choice: offer.title,
+          upgradeType: offer.type,
+          desc: offer.desc,
+          nextRound: this.game.round,
+          nextTarget: this.game.target,
+          deck: this.deckCounts(),
+        });
+        this.logRoundStart();
         this.screen = "playing";
         return;
       }
     }
     if (this.ui.shopSkip && pointInRect(x, y, this.ui.shopSkip)) {
       sound.click();
+      const fromRound = this.game.round;
+      const focusBefore = this.game.focus;
       this.game.chooseUpgrade(null);
+      devLog("upgrade", {
+        fromRound,
+        choice: "(skip)",
+        focusEarned: this.game.focus - focusBefore,
+        focusTotal: this.game.focus,
+        nextRound: this.game.round,
+        nextTarget: this.game.target,
+        deck: this.deckCounts(),
+      });
+      this.logRoundStart();
       this.screen = "playing";
     }
   }
@@ -240,8 +332,22 @@ export class App {
 
     if (targetId !== null) {
       const circle = this.ui.nodeCircles.find((c) => c.id === targetId);
+      const roundBefore = this.game.round;
+      const turnBefore = this.game.turn;
       const res = this.game.play(drag.handIndex, targetId);
       if (res && circle) {
+        devLog("play", {
+          round: roundBefore,
+          turn: turnBefore,
+          card: cardLabel(drag.card),
+          targetNodeId: targetId,
+          kind: res.kind,
+          score: this.game.currentScore,
+          target: this.game.target,
+          depth: treeHeight(this.game.root),
+          tree: treeToString(this.game.root),
+          hand: this.game.hand.map((c) => cardLabel(c)),
+        });
         if (res.kind === "op-on-leaf") {
           sound.sprout();
         } else {
@@ -255,10 +361,27 @@ export class App {
           150,
         );
       } else {
+        // Landed on a node but the game rejected the placement.
+        devLog("play_failed", {
+          round: this.game.round,
+          turn: this.game.turn,
+          card: cardLabel(drag.card),
+          targetNodeId: targetId,
+          reason: "rejected",
+          legalTargetCount: this.legalNow.size,
+        });
         sound.error();
       }
     } else if (drag.moved) {
-      // Dropped somewhere invalid.
+      // Dropped in empty space / on no legal node.
+      devLog("play_failed", {
+        round: this.game.round,
+        turn: this.game.turn,
+        card: cardLabel(drag.card),
+        targetNodeId: null,
+        reason: "no_target",
+        legalTargetCount: this.legalNow.size,
+      });
       sound.error();
     }
     this.legalNow = new Set();
@@ -296,6 +419,8 @@ export class App {
     this.game.startRun();
     this.screen = "playing";
     this.hintShown = true;
+    this.logRunStart("new");
+    this.logRoundStart();
   }
 
   private restart(): void {
@@ -303,15 +428,81 @@ export class App {
     this.game.startRun();
     this.screen = "playing";
     this.hintShown = true;
+    this.logRunStart("restart");
+    this.logRoundStart();
+  }
+
+  private logRunStart(cause: "new" | "restart"): void {
+    devLog("run_start", {
+      cause,
+      mode: this.game.cfg.mode,
+      seed: this.game.seed,
+      config: this.game.cfg,
+      target: this.game.target,
+      deck: this.deckCounts(),
+    });
+  }
+
+  /** The canonical opening-hand event, fired whenever a round begins. */
+  private logRoundStart(): void {
+    devLog("round_start", {
+      round: this.game.round,
+      turn: this.game.turn,
+      target: this.game.target,
+      depthCap: this.game.currentDepth,
+      focus: this.game.focus,
+      hand: this.game.hand.map((c) => cardLabel(c)),
+      deck: this.deckCounts(),
+      deckRemaining: this.game.roundDeck.length + this.game.hand.length,
+    });
+  }
+
+  /** Structured `{label: count}` view of the current run deck. */
+  private deckCounts(): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const c of this.game.deck) {
+      const k = cardLabel(c);
+      counts[k] = (counts[k] ?? 0) + 1;
+    }
+    return counts;
   }
 
   private beginEvaluate(): void {
     if (this.screen !== "playing") return;
     sound.click();
     this.evalAnim = new EvaluateAnimation(this.game.root);
+    const tree = treeToString(this.game.root);
+    const depth = treeHeight(this.game.root);
     // Score now (updates game.phase & offers); the app stays on the animation
     // until it finishes, then routes based on the stored result.
-    this.game.evaluate();
+    const result = this.game.evaluate();
+    devLog("evaluate", {
+      round: result.round,
+      score: result.score,
+      target: result.target,
+      won: result.won,
+      margin: result.overshoot,
+      overshootPct: result.target > 0 ? result.overshoot / result.target : 0,
+      grade: result.grade,
+      focusEarned: result.focusEarned,
+      focusTotal: this.game.focus,
+      model: this.game.cfg.precisionModel,
+      depthCap: this.game.currentDepth,
+      depth,
+      tree,
+      bestScore: this.game.bestScore,
+      roundsCleared: this.game.roundsCleared,
+    });
+    if (!result.won) {
+      devLog("game_over", {
+        reachedRound: result.round,
+        score: result.score,
+        target: result.target,
+        bestScore: this.game.bestScore,
+        roundsCleared: this.game.roundsCleared,
+        deck: this.deckCounts(),
+      });
+    }
     this.screen = "evaluating";
   }
 
@@ -378,14 +569,16 @@ export class App {
     r.drawButton(classicBtn, "▶  Classic", { primary: true, time: this.time });
     this.ui.classicBtn = classicBtn;
 
+    // Functions mode is not ready to share yet — shown disabled as "Coming
+    // soon" and left unclickable (we never register its hit-rect).
     const funcBtn: Rect = { x: cx - bw / 2, y: y0 + 70, w: bw, h: 58 };
-    r.drawButton(funcBtn, "ƒ  Functions", { primary: true, time: this.time });
-    this.ui.functionsBtn = funcBtn;
+    r.drawButton(funcBtn, "ƒ  Functions  (soon)", { enabled: false });
+    this.ui.functionsBtn = undefined;
     r.text(
-      "Functions mode adds the variable x and an evaluate operator",
+      "Functions mode (variable x + evaluate operator) — coming soon",
       cx,
       y0 + 70 + 78,
-      { size: 13, color: "rgba(183,155,255,0.85)" },
+      { size: 13, color: "rgba(183,155,255,0.6)" },
     );
 
     const helpBtn: Rect = { x: cx - bw / 2, y: y0 + 156, w: bw, h: 44 };
@@ -403,6 +596,7 @@ export class App {
 
   private drawRulesPanel(): void {
     const r = this.renderer;
+    const depth = this.game.currentDepth;
     const lines = [
       "Build an arithmetic tree to reach the target score.",
       "",
@@ -411,29 +605,56 @@ export class App {
       "• + and × cards split a number into (number ○ 0),",
       "   sprouting a fresh 0 to fill.",
       "• Careful: × by an unfilled 0 zeroes the whole branch!",
-      "• Evaluate to score. Clear the round → upgrade your deck.",
-      "• Targets keep rising. See how far you can go.",
+      "• Re-draw your hand to fish for a card (e.g. a ×) —",
+      "   free when stuck, else a small ◆ cost that rises.",
+      `• The tree is ${depth} levels deep for now (up to ${2 ** depth} numbers) —`,
+      "   grow it deeper by spending focus in the shop.",
       "",
-      "Functions mode adds two cards:",
-      "• x — a variable leaf (fills a 0-slot).",
-      "• ƒ — evaluate: ƒ turns a leaf into ƒ(F, a). The left F is",
-      "   a polynomial (may use x); the right a is the point to",
-      "   evaluate it at.  e.g.  ƒ(x×x, 3) = 9.",
+      "PRECISION — clear by as LITTLE as possible to bank ◆ focus:",
+      "   PERFECT (exactly on target)   → +5 ◆",
+      "   SHARP   (within  5% over)     → +4 ◆",
+      "   CLOSE   (within 10% over)     → +3 ◆",
+      "   NEAR    (within 15% over)     → +2 ◆",
+      "   LOOSE   (within 20% over)     → +1 ◆",
+      "   CLEARED (more than 20% over)  → +0 ◆",
+      "   UNDERSHOOT the target         → the run ends!",
+      "",
+      "• Skip a shop upgrade to bank +1 ◆.",
+      "• Spend ◆ to GROW the tree one level deeper — OR take a",
+      "   card upgrade. One action per round, so choose well.",
+      "• Re-roll the shop (⟳) with ◆ to fish for a card.",
+      "• Targets keep rising. See how far you can go.",
     ];
-    const lineH = 23;
+    // Only explain the Functions-mode cards when actually playing that mode.
+    if (this.game.cfg.mode === "functions") {
+      lines.push(
+        "",
+        "Functions mode adds two cards:",
+        "• x — a variable leaf (fills a 0-slot).",
+        "• ƒ — evaluate: ƒ turns a leaf into ƒ(F, a). The left F is",
+        "   a polynomial (may use x); the right a is the point to",
+        "   evaluate it at.  e.g.  ƒ(x×x, 3) = 9.",
+      );
+    }
+    // Size the panel up to 92% of the screen, then fit the lines into the body
+    // between the header and the footer so nothing overflows on short screens.
+    const headerH = 70;
+    const footerH = 30;
     const w = Math.min(600, r.width * 0.92);
-    const h = Math.min(r.height * 0.9, 84 + lines.length * lineH);
+    const h = Math.min(r.height * 0.92, headerH + lines.length * 23 + footerH);
+    const bodyH = h - headerH - footerH;
+    const lineH = Math.min(23, bodyH / Math.max(1, lines.length));
+    const fontSize = Math.max(11, Math.min(15, lineH - 5));
     const rect: Rect = { x: (r.width - w) / 2, y: (r.height - h) / 2, w, h };
     r.drawDimmer(0.5);
     r.drawPanel(rect);
-    let y = rect.y + 36;
-    r.text("How to play", rect.x + rect.w / 2, y, { size: 22, weight: 800 });
-    y += 34;
+    r.text("How to play", rect.x + rect.w / 2, rect.y + 36, { size: 22, weight: 800 });
+    let y = rect.y + headerH;
     for (const line of lines) {
-      r.text(line, rect.x + 26, y, { size: 15, align: "left", color: "rgba(234,240,255,0.85)" });
+      r.text(line, rect.x + 26, y, { size: fontSize, align: "left", color: "rgba(234,240,255,0.85)" });
       y += lineH;
     }
-    r.text("(tap ? again to close)", rect.x + rect.w / 2, rect.y + h - 20, {
+    r.text("(tap ? again to close)", rect.x + rect.w / 2, rect.y + h - 16, {
       size: 12,
       color: "rgba(234,240,255,0.45)",
     });
@@ -453,7 +674,9 @@ export class App {
     });
 
     // Hand (dim unplayable cards)
-    const playable = g.hand.map((c) => hasLegalTarget(g.root, c));
+    const playable = g.hand.map((c) =>
+      hasLegalTarget(g.root, c, g.currentDepth),
+    );
     const handRects = r.drawHand(g.hand, {
       draggingIndex: this.drag ? this.drag.handIndex : null,
       time: this.time,
@@ -468,6 +691,9 @@ export class App {
       deckRemaining: g.roundDeck.length + g.hand.length,
       deckTotal: g.deck.length,
       muted: sound.muted,
+      depth: g.currentDepth,
+      maxDepth: g.currentDepth,
+      focus: g.focus,
     });
 
     if (!background) {
@@ -476,6 +702,7 @@ export class App {
       this.ui.muteRect = muteRect;
       this.layoutPlayControls();
       this.drawPlayControls();
+      this.drawDepthBeamCue(dt);
       this.drawHintMaybe();
     }
 
@@ -493,9 +720,9 @@ export class App {
     const evalBtn: Rect = { x: r.width - 148, y, w: 136, h: 44 };
     this.ui.evaluateBtn = evalBtn;
 
-    // Redraw button appears only when the player is genuinely stuck.
-    const stuck = !this.game.canPlayAny() && this.game.roundDeck.length > 0;
-    this.ui.redrawBtn = stuck ? { x: 12, y, w: 128, h: 44 } : undefined;
+    // Redraw button: free when stuck (safety net), otherwise a paid "fish" to
+    // hunt for a card (e.g. a ×). Shown whenever a re-draw is possible.
+    this.ui.redrawBtn = this.game.canRedraw() ? { x: 12, y, w: 148, h: 44 } : undefined;
 
     this.ui.helpBtn = { x: 12, y: this.renderer.height - this.renderer.handHeight - 44, w: 40, h: 36 };
   }
@@ -510,12 +737,36 @@ export class App {
       });
     }
     if (this.ui.redrawBtn) {
-      r.drawButton(this.ui.redrawBtn, "↻ Redraw");
+      const cost = this.game.redrawCost;
+      const label = cost > 0 ? `↻ Redraw  ${cost} ◆` : "↻ Redraw (free)";
+      r.drawButton(this.ui.redrawBtn, label);
     }
     if (this.ui.helpBtn) {
       r.drawButton(this.ui.helpBtn, "?");
     }
     if (this.showHelp) this.drawRulesPanel();
+  }
+
+  /**
+   * Visual depth-cap cue: a red beam glows below the tree when it has reached
+   * its maximum depth. Eased so it fades in/out rather than snapping.
+   */
+  private drawDepthBeamCue(dt: number): void {
+    const g = this.game;
+    const atCap = treeHeight(g.root) >= g.currentDepth;
+    const target = atCap ? 1 : 0;
+    // Simple exponential ease toward the target intensity.
+    this.depthBeam += (target - this.depthBeam) * Math.min(1, dt * 10);
+    // Position the beam just below the lowest bubble so it never cuts through
+    // the bottom row; fall back to the tree-area floor if there are no circles.
+    const circles = this.ui.nodeCircles;
+    const r = this.renderer;
+    const floor = r.treeRect.y + r.treeRect.h + 4;
+    const bubbleBottom = circles.length
+      ? Math.max(...circles.map((c) => c.y + c.r))
+      : floor;
+    const beamY = Math.max(floor, bubbleBottom + 12);
+    this.renderer.drawDepthBeam(this.time, this.depthBeam, beamY);
   }
 
   private drawHintMaybe(): void {
@@ -560,6 +811,8 @@ export class App {
       deckRemaining: g.roundDeck.length + g.hand.length,
       deckTotal: g.deck.length,
       muted: sound.muted,
+      depth: g.currentDepth,
+      focus: g.focus,
     });
     this.ui.muteRect = muteRect;
 
@@ -583,55 +836,150 @@ export class App {
     const g = this.game;
     r.drawDimmer(0.6);
 
+    const cx = r.width / 2;
+    const pad = 20;
     const w = Math.min(680, r.width * 0.94);
-    const h = Math.min(440, r.height * 0.8);
+
+    // --- Upgrade option cards: width and height are computed first so the panel
+    // can be sized to fit their (wrapped) content. On a narrow phone the cards
+    // get narrow, the descriptions wrap to more lines, and a fixed card height
+    // would clip them — so we measure the text and size the cards to match.
+    const n = g.offers.length;
+    const gap = 12;
+    const optW = Math.min(180, (w - 2 * pad - gap * (n - 1)) / Math.max(1, n));
+    const descSize = optW < 118 ? 12 : 13;
+    let maxLines = 1;
+    for (const o of g.offers) {
+      maxLines = Math.max(maxLines, this.wrapLineCount(o.desc, optW - 20, descSize));
+    }
+    const optH = 120 + maxLines * (descSize + 4) + 22;
+
+    // Size the panel to the content (header + cards + footer), capped to the
+    // viewport so it always fits on screen.
+    const headerH = 128;
+    const footerH = 116; // helper line + deck comp + button row
+    const h = Math.min(r.height * 0.92, Math.max(440, headerH + optH + footerH));
     const panel: Rect = { x: (r.width - w) / 2, y: (r.height - h) / 2, w, h };
     r.drawPanel(panel);
 
     const res = g.lastResult;
-    r.text(`Round ${res?.round ?? g.round} cleared! 🎉`, r.width / 2, panel.y + 40, {
-      size: 26,
+    const textMax = w - 2 * pad;
+    // Header block flows from the top with a running cursor.
+    let y = panel.y + 30;
+    r.text(`Round ${res?.round ?? g.round} cleared! 🎉`, cx, y, {
+      size: 24,
       weight: 800,
       color: "#7CF29B",
+      maxWidth: textMax,
     });
+    y += 28;
     r.text(
-      `You scored ${res?.score ?? 0} (needed ${res?.target ?? g.target}). Choose an upgrade:`,
-      r.width / 2,
-      panel.y + 74,
-      { size: 15, color: "rgba(234,240,255,0.8)" },
+      `You scored ${(res?.score ?? 0).toLocaleString()} · needed ${(res?.target ?? g.target).toLocaleString()}.`,
+      cx,
+      y,
+      { size: 15, color: "rgba(234,240,255,0.8)", maxWidth: textMax },
     );
+    y += 24;
+    // Precision grade + focus banked — the heart of the skill loop.
+    if (res) {
+      const label =
+        res.focusEarned > 0
+          ? `${res.grade} LAND    +${res.focusEarned} ◆ focus`
+          : `${res.grade}    +0 ◆ focus`;
+      r.text(label, cx, y, {
+        size: 16,
+        weight: 800,
+        color: gradeColor(res.grade),
+        maxWidth: textMax,
+      });
+      y += 24;
+    }
+    // Show the target the chosen upgrade will be tested against next round.
+    const nextTarget = targetForRound(g.round + 1, g.cfg);
+    r.text(`Next round target:  ${nextTarget.toLocaleString()}`, cx, y, {
+      size: 16,
+      weight: 800,
+      color: "#FFC46B",
+      maxWidth: textMax,
+    });
 
-    // Upgrade option cards.
-    const n = g.offers.length;
-    const gap = 18;
-    const optW = Math.min(180, (panel.w - 48 - gap * (n - 1)) / Math.max(1, n));
-    const optH = 200;
+    // Draw the option cards.
     const totalW = n * optW + (n - 1) * gap;
-    let ox = r.width / 2 - totalW / 2;
-    const oy = panel.y + 108;
+    let ox = cx - totalW / 2;
+    const oy = panel.y + headerH;
     this.ui.shopOptions = [];
     for (let i = 0; i < n; i++) {
       const rect: Rect = { x: ox, y: oy, w: optW, h: optH };
       this.ui.shopOptions.push(rect);
-      this.drawShopOption(rect, g.offers[i], i);
+      this.drawShopOption(rect, g.offers[i], i, descSize);
       ox += optW + gap;
     }
+    // Make the one-action-per-round rule explicit (re-roll is free-standing).
+    r.text(
+      "Take ONE upgrade, grow the tree, or skip to advance · Re-roll just refreshes offers.",
+      cx,
+      oy + optH + 16,
+      { size: 12, color: "rgba(234,240,255,0.6)", maxWidth: textMax },
+    );
 
-    // Skip button + deck info.
-    const skip: Rect = { x: r.width / 2 - 80, y: panel.y + h - 56, w: 160, h: 40 };
-    r.drawButton(skip, "Skip upgrade");
-    this.ui.shopSkip = skip;
-    r.text(`Deck: ${this.deckSummary()}`, r.width / 2, panel.y + h - 74, {
-      size: 13,
-      color: "rgba(234,240,255,0.55)",
+    // Bottom row: Grow the tree · Re-roll offers · Skip. Grow and Skip end the
+    // round; Re-roll just refreshes the offers (both spend focus). Pinned to the
+    // panel bottom; the deck composition sits just above it.
+    const btnY = panel.y + h - 52;
+    const bgap = 10;
+    const bw = Math.min(158, (w - 2 * pad - 2 * bgap) / 3);
+
+    // Deck composition, pinned just above the button row.
+    const tc = this.deckTypeCounts();
+    r.text(`Your deck — ${tc.summary}`, cx, btnY - 32, {
+      size: 14,
+      weight: 700,
+      color: "rgba(234,240,255,0.9)",
+      maxWidth: textMax,
     });
+    r.text(this.deckDetailLine(), cx, btnY - 14, {
+      size: 12,
+      color: "rgba(234,240,255,0.55)",
+      maxWidth: textMax,
+    });
+
+    const total = 3 * bw + 2 * bgap;
+    let bx = cx - total / 2;
+
+    const grow: Rect = { x: bx, y: btnY, w: bw, h: 40 };
+    const maxed = g.currentDepth >= MAX_DEPTH;
+    r.drawButton(grow, maxed ? "Tree maxed" : `Grow ↑  ${g.growCost} ◆`, {
+      primary: g.canGrow(),
+      enabled: !maxed && g.canGrow(),
+      time: this.time,
+    });
+    this.ui.shopGrow = maxed ? undefined : grow;
+    bx += bw + bgap;
+
+    const reroll: Rect = { x: bx, y: btnY, w: bw, h: 40 };
+    r.drawButton(reroll, `Re-roll ⟳  ${g.rerollCost} ◆`, {
+      enabled: g.canReroll(),
+    });
+    this.ui.shopReroll = reroll;
+    bx += bw + bgap;
+
+    const skip: Rect = { x: bx, y: btnY, w: bw, h: 40 };
+    // Skipping the upgrade banks +1 focus under the tiered model — surface that.
+    const skipBanks = g.cfg.precisionModel === "tiered";
+    r.drawButton(skip, skipBanks ? "Skip  +1 ◆" : "Skip");
+    this.ui.shopSkip = skip;
 
     // mute still available
     const { muteRect } = this.peekMute();
     this.ui.muteRect = muteRect;
   }
 
-  private drawShopOption(rect: Rect, offer: import("../core/upgrades").Upgrade, i: number): void {
+  private drawShopOption(
+    rect: Rect,
+    offer: import("../core/upgrades").Upgrade,
+    i: number,
+    descSize = 13,
+  ): void {
     const r = this.renderer;
     r.drawButton(rect, "", { time: this.time });
     // Icon glyph
@@ -648,14 +996,33 @@ export class App {
       color = "#FFC46B";
     }
     const cx = rect.x + rect.w / 2;
-    r.text(glyph, cx, rect.y + 52, { size: 46, weight: 800, color });
-    // wrap title/desc
-    r.text(offer.title, cx, rect.y + 110, { size: 16, weight: 800 });
-    this.wrapText(offer.desc, cx, rect.y + 134, rect.w - 20, 13);
-    r.text(`[ ${i + 1} ]`, cx, rect.y + rect.h - 18, {
+    r.text(glyph, cx, rect.y + 50, { size: 44, weight: 800, color });
+    // Title clamped to card width; description wraps within the card.
+    r.text(offer.title, cx, rect.y + 104, { size: 15, weight: 800, maxWidth: rect.w - 12 });
+    this.wrapText(offer.desc, cx, rect.y + 126, rect.w - 20, descSize);
+    r.text(`[ ${i + 1} ]`, cx, rect.y + rect.h - 16, {
       size: 12,
       color: "rgba(234,240,255,0.5)",
     });
+  }
+
+  /** Counts how many lines `wrapText` will produce for the given width/size. */
+  private wrapLineCount(text: string, maxW: number, size: number): number {
+    const ctx = this.renderer.ctx;
+    ctx.font = `500 ${size}px sans-serif`;
+    let line = "";
+    let lines = 0;
+    for (const word of text.split(" ")) {
+      const test = line ? line + " " + word : word;
+      if (ctx.measureText(test).width > maxW && line) {
+        lines++;
+        line = word;
+      } else {
+        line = test;
+      }
+    }
+    if (line) lines++;
+    return Math.max(1, lines);
   }
 
   private wrapText(text: string, cx: number, y: number, maxW: number, size: number): void {
@@ -746,13 +1113,66 @@ export class App {
     };
   }
 
-  private deckSummary(): string {
-    const counts = new Map<string, number>();
+  /**
+   * Deck composition by card *type*, plus a human summary. "Operations" counts
+   * the arithmetic operators (+ ×); the evaluate operator ƒ is counted under
+   * "functions" to match how the modes are described to the player.
+   */
+  private deckTypeCounts(): {
+    numbers: number;
+    operations: number;
+    variables: number;
+    functions: number;
+    total: number;
+    summary: string;
+  } {
+    let numbers = 0,
+      operations = 0,
+      variables = 0,
+      functions = 0;
     for (const c of this.game.deck) {
-      const k = cardLabel(c);
-      counts.set(k, (counts.get(k) ?? 0) + 1);
+      if (c.kind === "number") numbers++;
+      else if (c.kind === "var") variables++;
+      else if (c.op === "@") functions++;
+      else operations++;
     }
-    return [...counts.entries()].map(([k, v]) => `${v}×${k}`).join("  ");
+    const total = this.game.deck.length;
+    const parts = [`${numbers} numbers`, `${operations} operations`];
+    if (variables > 0) parts.push(`${variables} variables`);
+    if (functions > 0) parts.push(`${functions} functions`);
+    return {
+      numbers,
+      operations,
+      variables,
+      functions,
+      total,
+      summary: `${total} cards  ·  ${parts.join("  ·  ")}`,
+    };
+  }
+
+  /**
+   * A per-card breakdown that avoids the old "2××" ambiguity: cards are listed
+   * expanded under type headers, so "×,×" plainly reads as two multiply cards.
+   */
+  private deckDetailLine(): string {
+    const nums: number[] = [];
+    const ops: string[] = [];
+    const vars: string[] = [];
+    const funcs: string[] = [];
+    for (const c of this.game.deck) {
+      if (c.kind === "number") nums.push(c.value);
+      else if (c.kind === "var") vars.push("x");
+      else if (c.op === "@") funcs.push("ƒ");
+      else ops.push(cardLabel(c));
+    }
+    nums.sort((a, b) => a - b);
+    ops.sort();
+    const sections: string[] = [];
+    if (nums.length) sections.push(`Numbers ${nums.join(",")}`);
+    if (ops.length) sections.push(`Ops ${ops.join(",")}`);
+    if (vars.length) sections.push(`Vars ${vars.join(",")}`);
+    if (funcs.length) sections.push(`Funcs ${funcs.join(",")}`);
+    return sections.join("     ");
   }
 }
 
@@ -763,4 +1183,26 @@ function shopGlyphColor(card: Card): string {
   if (card.op === "*") return "#FFC46B";
   if (card.op === "@") return "#b79bff";
   return "#7CF29B";
+}
+
+/** Colour for a precision land grade, coolest (green) for the tightest land. */
+function gradeColor(grade: LandGrade): string {
+  switch (grade) {
+    case "PERFECT":
+      return "#7CF29B";
+    case "SHARP":
+      return "#8fe4ff";
+    case "CLOSE":
+      return "#FFC46B";
+    case "NEAR":
+      return "#ffa86b";
+    case "LOOSE":
+      return "#ff8f8f";
+    case "SCRAPE":
+      return "#ff9be0";
+    case "MISS":
+      return "#ff6b8a";
+    default:
+      return "rgba(234,240,255,0.7)"; // CLEARED
+  }
 }

@@ -104,6 +104,27 @@ export function nodeCount(node: TreeNode): number {
     : 1;
 }
 
+/** Depth of every node keyed by id (the root is depth 0). */
+export function nodeDepths(root: TreeNode): Map<NodeId, number> {
+  const m = new Map<NodeId, number>();
+  const walk = (n: TreeNode, d: number): void => {
+    m.set(n.id, d);
+    if (n.type === "op") {
+      walk(n.left, d + 1);
+      walk(n.right, d + 1);
+    }
+  };
+  walk(root, 0);
+  return m;
+}
+
+/** Depth of the deepest node in the tree (a single slot has height 0). */
+export function treeHeight(root: TreeNode): number {
+  let max = 0;
+  for (const d of nodeDepths(root).values()) max = Math.max(max, d);
+  return max;
+}
+
 /** Number of empty slots remaining — useful for hints and AI/testing. */
 export function slotCount(node: TreeNode): number {
   if (node.type === "slot") return 1;
@@ -129,16 +150,36 @@ export function canPlaceOn(node: TreeNode, card: Card): boolean {
   }
 }
 
-/** Ids of every node onto which `card` may currently be played. */
-export function legalTargets(root: TreeNode, card: Card): NodeId[] {
+/**
+ * Ids of every node onto which `card` may currently be played.
+ *
+ * `maxDepth` caps how tall the tree may grow: playing an operator on a leaf at
+ * depth `d` sprouts children at depth `d + 1`, so an operator is only legal on a
+ * leaf with `d + 1 <= maxDepth`. Numbers/variables fill slots without deepening
+ * the tree, so they ignore the cap. The default of `Infinity` means "no cap".
+ */
+export function legalTargets(
+  root: TreeNode,
+  card: Card,
+  maxDepth: number = Infinity,
+): NodeId[] {
+  const depths = card.kind === "op" ? nodeDepths(root) : null;
   return listNodes(root)
-    .filter((n) => canPlaceOn(n, card))
+    .filter((n) => {
+      if (!canPlaceOn(n, card)) return false;
+      if (depths && depths.get(n.id)! + 1 > maxDepth) return false;
+      return true;
+    })
     .map((n) => n.id);
 }
 
 /** Does the tree currently admit ANY legal placement of `card`? */
-export function hasLegalTarget(root: TreeNode, card: Card): boolean {
-  return listNodes(root).some((n) => canPlaceOn(n, card));
+export function hasLegalTarget(
+  root: TreeNode,
+  card: Card,
+  maxDepth: number = Infinity,
+): boolean {
+  return legalTargets(root, card, maxDepth).length > 0;
 }
 
 // --- Placement ----------------------------------------------------------------
@@ -167,9 +208,20 @@ function copyLeaf(node: TreeNode): TreeNode {
  * Returns a NEW tree with `card` played on node `targetId`, or `null` if the
  * placement is illegal. Structural sharing keeps untouched subtrees identical.
  */
-export function place(tree: Tree, targetId: NodeId, card: Card): PlaceResult | null {
+export function place(
+  tree: Tree,
+  targetId: NodeId,
+  card: Card,
+  maxDepth: number = Infinity,
+): PlaceResult | null {
   const target = findNode(tree.root, targetId);
   if (!target || !canPlaceOn(target, card)) return null;
+  // Enforce the tree-height cap: an operator would sprout children one level
+  // below its target leaf, so reject it if that would exceed `maxDepth`.
+  if (card.kind === "op" && maxDepth !== Infinity) {
+    const depth = nodeDepths(tree.root).get(targetId)!;
+    if (depth + 1 > maxDepth) return null;
+  }
 
   let nextId = tree.nextId;
   const newNodeIds: NodeId[] = [];

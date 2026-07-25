@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { Game, DEFAULT_CONFIG, targetForRound } from "../src/core/game";
+import { Game, DEFAULT_CONFIG, targetForRound, gradeLand, costToGrow, MAX_DEPTH } from "../src/core/game";
 import { applyUpgrade, generateOffers } from "../src/core/upgrades";
 import { starterDeck, numberCard, cardKey } from "../src/core/cards";
 import { Rng } from "../src/core/rng";
@@ -99,12 +99,20 @@ describe("Game flow", () => {
     expect(g.round).toBe(2);
   });
 
-  it("redraw only works when there is no legal move", () => {
+  it("redraw is a paid fish when a legal move exists (free only when stuck)", () => {
     const g = new Game(DEFAULT_CONFIG, 21);
     g.startRun();
-    // With a fresh tree and a mixed hand there is (almost always) a legal move.
+    // Fresh tree + mixed hand → a legal move exists → re-drawing is a paid fish.
     if (g.canPlayAny()) {
+      expect(g.redrawCost).toBeGreaterThan(0);
+      g.focus = 0;
+      expect(g.canRedraw()).toBe(false); // can't afford
       expect(g.redraw()).toBe(false);
+      g.focus = 5;
+      expect(g.redraw()).toBe(true); // paid fish
+      expect(g.focus).toBe(4); // FISH_BASE = 1
+      expect(g.fishCount).toBe(1);
+      expect(g.redrawCost).toBe(2); // cost rises with each fish
     }
   });
 });
@@ -161,6 +169,121 @@ describe("upgrades", () => {
   });
 });
 
+describe("precision grading (gradeLand)", () => {
+  it("tiered: grades by overshoot and banks focus for tight clears", () => {
+    expect(gradeLand(100, 100, "tiered")).toEqual({ won: true, grade: "PERFECT", focusEarned: 5 });
+    expect(gradeLand(104, 100, "tiered")).toEqual({ won: true, grade: "SHARP", focusEarned: 4 });
+    expect(gradeLand(108, 100, "tiered")).toEqual({ won: true, grade: "CLOSE", focusEarned: 3 });
+    expect(gradeLand(113, 100, "tiered")).toEqual({ won: true, grade: "NEAR", focusEarned: 2 });
+    expect(gradeLand(118, 100, "tiered")).toEqual({ won: true, grade: "LOOSE", focusEarned: 1 });
+    expect(gradeLand(300, 100, "tiered")).toEqual({ won: true, grade: "CLEARED", focusEarned: 0 });
+  });
+
+  it("undershoot is a MISS (loss) under tiered/continuous", () => {
+    expect(gradeLand(99, 100, "tiered").won).toBe(false);
+    expect(gradeLand(99, 100, "continuous").won).toBe(false);
+  });
+
+  it("safety model scrapes a small undershoot but not a large one", () => {
+    expect(gradeLand(98, 100, "safety")).toEqual({ won: true, grade: "SCRAPE", focusEarned: 0 });
+    expect(gradeLand(90, 100, "safety").won).toBe(false);
+  });
+
+  it("continuous focus decreases smoothly with overshoot", () => {
+    expect(gradeLand(100, 100, "continuous").focusEarned).toBe(5); // perfect
+    expect(gradeLand(150, 100, "continuous").focusEarned).toBe(3); // 50% over → round(5*0.5)
+    expect(gradeLand(250, 100, "continuous").focusEarned).toBe(0); // >=100% over → none
+  });
+});
+
+describe("tree growth economy", () => {
+  it("banks focus on a clear and spends it to grow depth", () => {
+    const g = new Game(DEFAULT_CONFIG, 55); // tiered by default
+    g.startRun();
+    expect(g.currentDepth).toBe(DEFAULT_CONFIG.startDepth);
+    const numIdx = g.hand.findIndex((c) => c.kind === "number" && c.value >= 1);
+    const value = (g.hand[numIdx] as { value: number }).value;
+    g.play(numIdx, 0); // tree evaluates to `value`
+    g.target = value; // a perfect land
+    const res = g.evaluate();
+    expect(res.grade).toBe("PERFECT");
+    expect(g.focus).toBe(5);
+
+    // Now in the shop: growing costs focus, raises the cap, and advances the
+    // round (mutually exclusive with taking a card upgrade).
+    const cost = g.growCost;
+    expect(cost).toBe(costToGrow(DEFAULT_CONFIG.startDepth));
+    expect(g.canGrow()).toBe(g.focus >= cost);
+    if (g.canGrow()) {
+      const roundBefore = g.round;
+      expect(g.growTree()).toBe(true);
+      expect(g.currentDepth).toBe(DEFAULT_CONFIG.startDepth + 1);
+      expect(g.focus).toBe(5 - cost);
+      expect(g.round).toBe(roundBefore + 1); // grow used up the shop
+      expect(g.phase).toBe("playing");
+    }
+  });
+
+  it("skipping the upgrade banks focus under the tiered model (not others)", () => {
+    const g = new Game(DEFAULT_CONFIG, 88); // tiered
+    g.startRun();
+    g.target = 1;
+    g.play(g.hand.findIndex((c) => c.kind === "number"), 0);
+    g.evaluate(); // reach the shop
+    g.focus = 0; // isolate the skip bonus from the land grade
+    g.chooseUpgrade(null); // skip
+    expect(g.focus).toBe(1);
+
+    // continuous banks nothing for a skip.
+    const g2 = new Game({ ...DEFAULT_CONFIG, precisionModel: "continuous" }, 88);
+    g2.startRun();
+    g2.target = 1;
+    g2.play(g2.hand.findIndex((c) => c.kind === "number"), 0);
+    g2.evaluate();
+    g2.focus = 0;
+    g2.chooseUpgrade(null);
+    expect(g2.focus).toBe(0);
+  });
+
+  it("re-rolls offers for focus with an escalating cost, without advancing", () => {
+    const g = new Game(DEFAULT_CONFIG, 42);
+    g.startRun();
+    g.target = 1;
+    g.play(g.hand.findIndex((c) => c.kind === "number"), 0);
+    g.evaluate(); // reach the shop
+    g.focus = 20;
+    const roundBefore = g.round;
+    expect(g.rerollCost).toBe(2); // first re-roll
+    expect(g.rerollOffers()).toBe(true);
+    expect(g.focus).toBe(18);
+    expect(g.offers.length).toBeGreaterThan(0);
+    expect(g.round).toBe(roundBefore); // re-roll does NOT advance
+    expect(g.phase).toBe("shop");
+    expect(g.rerollCost).toBe(4); // cost rises
+    expect(g.rerollOffers()).toBe(true);
+    expect(g.focus).toBe(14);
+
+    g.focus = 0;
+    expect(g.canReroll()).toBe(false);
+    expect(g.rerollOffers()).toBe(false);
+  });
+
+  it("cannot grow without enough focus or past the ceiling", () => {
+    const g = new Game(DEFAULT_CONFIG, 7);
+    g.startRun();
+    g.target = 0; // trivial clear, banks 0 (huge overshoot)
+    g.evaluate();
+    g.focus = 0;
+    expect(g.canGrow()).toBe(false);
+    expect(g.growTree()).toBe(false);
+    expect(g.currentDepth).toBe(DEFAULT_CONFIG.startDepth);
+
+    g.focus = 100000;
+    g.currentDepth = MAX_DEPTH;
+    expect(g.canGrow()).toBe(false); // at the ceiling
+  });
+});
+
 describe("integration: a legal target always exists after any real play", () => {
   it("keeps the tree buildable through a scripted round", () => {
     const g = new Game(DEFAULT_CONFIG, 314159);
@@ -170,7 +293,7 @@ describe("integration: a legal target always exists after any real play", () => 
     for (let i = 0; i < 20 && !g.isHandEmpty; i++) {
       let played = false;
       for (let h = 0; h < g.hand.length; h++) {
-        const targets = legalTargets(g.root, g.hand[h]);
+        const targets = legalTargets(g.root, g.hand[h], g.currentDepth);
         if (targets.length > 0) {
           g.play(h, targets[0]);
           played = true;
