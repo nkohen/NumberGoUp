@@ -35,25 +35,54 @@ import { Upgrade, generateOffers, applyUpgrade } from "./upgrades";
 export type Phase = "title" | "playing" | "shop" | "gameover" | "won";
 
 /**
- * Clearing this round wins the run. The game is endless by nature, but the late
- * game converges on the same "big multiply tree + a small additive tweak" shape,
- * so round 30 is a satisfying finish line — a milestone win (you can still choose
- * to keep playing past it).
+ * Clearing this round wins a CLASSIC/FUNCTIONS run. The game is endless by
+ * nature, but the late game converges on the same "big multiply tree + a small
+ * additive tweak" shape, so round 30 is a satisfying finish line — a milestone
+ * win (you can still choose to keep playing past it).
  */
 export const WIN_ROUND = 30;
 
 /**
- * Game variants:
- *  - `classic`   — numbers and +/× only (the original spec).
- *  - `functions` — additionally the variable `x` and the evaluate operator `ƒ`,
- *    letting you build a polynomial and evaluate it at a point.
+ * Surviving this round wins a PRECISION run. It needs its own, shorter finish
+ * line because the two modes run out of road differently. Classic's target curve
+ * rises forever, so a run ends itself. Precision's target range STOPS widening
+ * at `precisionRangeMax` (~round 15), after which nothing escalates: HP only
+ * falls, so a deck precise enough to average ~0 damage would face no opposition
+ * and could run indefinitely. Round 20 sits just past the plateau — long enough
+ * that you have to survive the full range, short enough to be a real finish.
  */
-export type GameMode = "classic" | "functions";
+export const PRECISION_WIN_ROUND = 20;
+
+/** The round whose clear wins the run, for a given mode. */
+export function winRoundFor(mode: GameMode): number {
+  return mode === "precision" ? PRECISION_WIN_ROUND : WIN_ROUND;
+}
 
 /**
- * How landing near the target is rewarded (the "precision" mechanic). The skill
- * is to clear the target by as LITTLE as possible; the reward is banked as
- * `focus`, spent to grow the tree's depth.
+ * Game variants. All three share the same build-a-tree mechanics; they differ
+ * only in what the target is and what happens when you land off it.
+ *  - `classic`   — numbers and +/× only (the original spec). Rising target, and
+ *    undershooting it ends the run.
+ *  - `functions` — classic plus the variable `x` and the evaluate operator `ƒ`,
+ *    letting you build a polynomial and evaluate it at a point.
+ *  - `precision`  — the target is RANDOM each round rather than a rising curve,
+ *    and missing it doesn't end the run: you take damage equal to your distance
+ *    from it (over OR under) out of a fixed HP pool. Nothing to "clear" — you
+ *    just survive as many rounds as your deck's precision can pay for.
+ */
+export type GameMode = "classic" | "functions" | "precision";
+
+/**
+ * How landing near the target is rewarded (the closeness → `focus` mechanic).
+ *
+ * ⚠️ Not to be confused with the **Precision game mode** (`GameMode`). This type
+ * predates it and applies to every mode: it only picks the shape of the focus
+ * reward curve. `cfg.precisionModel` = reward bands; `cfg.mode === "precision"`
+ * = the HP/random-target variant, whose own knobs are the `precisionHp` /
+ * `precisionRange*` fields below.
+ *
+ * The skill is to clear the target by as LITTLE as possible; the reward is
+ * banked as `focus`, spent to grow the tree's depth.
  *   - `tiered`     — graded bands by overshoot → 5/4/3/2/1/0 focus.
  *   - `continuous` — focus scales smoothly with how close you landed.
  *   - `safety`     — like `tiered`, but a small UNDERshoot still clears (banks 0)
@@ -88,8 +117,21 @@ export interface GameConfig {
    * leaves, so early rounds are a tight "pick your best four" puzzle.
    */
   startDepth: number;
-  /** How precision (closeness to the target) is rewarded. */
+  /**
+   * How closeness to the target is rewarded, in ALL modes. Despite the name this
+   * is not the Precision-mode switch — that's `mode` (see {@link PrecisionModel}).
+   */
   precisionModel: PrecisionModel;
+
+  // --- Precision mode only (mode === "precision") -------------------------------
+  /** Starting (and maximum) HP. There is no healing — it only goes down. */
+  precisionHp: number;
+  /** Round-1 exclusive upper bound of the random target range. */
+  precisionRangeStart: number;
+  /** How fast that bound widens per round. */
+  precisionRangeGrowth: number;
+  /** The bound stops widening here — the range the mode ultimately settles on. */
+  precisionRangeMax: number;
 }
 
 export const DEFAULT_CONFIG: GameConfig = {
@@ -116,6 +158,33 @@ export const DEFAULT_CONFIG: GameConfig = {
   upgradeChoices: 3,
   startDepth: 2,
   precisionModel: "tiered",
+
+  // Precision: 100 HP, and a target drawn uniformly from a range that WIDENS
+  // toward [1, 1000) rather than starting there. The starter deck tops out at a
+  // score of 9, so an immediate [1, 1000) would average ~491 damage a round and
+  // kill you on round 1 — the range has to start inside what the deck can build
+  // and then outrun it.
+  //
+  // Growth 1.35 gives caps 10, 14, 19, 25, 34, 45, 61, 82, 111, 149 … reaching
+  // the full [1, 1000) at round 17 — so the last few rounds before the win are
+  // played at the full range.
+  //
+  // Set by `tools/precisionmode.ts` (greedy semi-skilled player, 100 trials),
+  // balancing two things that pull against each other once PRECISION_WIN_ROUND
+  // exists: the win has to be reachable, but it should not arrive BEFORE the
+  // range has finished widening, or you'd win without ever facing [1, 1000).
+  //   growth  full range at   median   wins @ r20
+  //   1.25    r22 (too late)  18       30%
+  //   1.30    r19             15       11%
+  //   1.35    r17             14        3%   ← here
+  //   1.40    r15             12        0%   (max run ever: 19 — unwinnable)
+  // A human should beat this myopic one-ply model comfortably, so 3% for the sim
+  // is meant to read as "a real stretch goal", not "impossible". Raise toward
+  // 1.40 to make winning elite-only; drop toward 1.30 to make it routine.
+  precisionHp: 100,
+  precisionRangeStart: 10,
+  precisionRangeGrowth: 1.35,
+  precisionRangeMax: 1000,
 };
 
 /** Hard ceiling on tree depth (keeps the game — and the analysis — tractable). */
@@ -188,7 +257,25 @@ export function gradeLand(
   return { won: true, grade: "CLEARED", focusEarned: 0 };
 }
 
-/** Config for a given mode (currently the modes share the target curve). */
+/**
+ * Grade a finalized score in PRECISION mode, where the target may be missed from
+ * either side. Damage is the raw distance; the focus reward reuses the same
+ * bands as {@link gradeLand} but on the ABSOLUTE relative distance, so
+ * undershooting by 5% pays exactly what overshooting by 5% does. Pure.
+ */
+export function gradePrecision(
+  score: number,
+  target: number,
+): { damage: number; grade: LandGrade; focusEarned: number } {
+  const damage = Math.abs(score - target);
+  const rel = target > 0 ? damage / target : 0;
+  for (const t of TIERS) {
+    if (rel <= t.maxOver) return { damage, grade: t.grade, focusEarned: t.focus };
+  }
+  return { damage, grade: "CLEARED", focusEarned: 0 };
+}
+
+/** Config for a given mode (the classic/functions modes share the target curve). */
 export function configForMode(mode: GameMode): GameConfig {
   return { ...DEFAULT_CONFIG, mode };
 }
@@ -196,6 +283,20 @@ export function configForMode(mode: GameMode): GameConfig {
 /** The target score for a given (1-indexed) round. */
 export function targetForRound(round: number, cfg: GameConfig): number {
   return Math.ceil(cfg.baseTarget * Math.pow(cfg.targetGrowth, round - 1));
+}
+
+/**
+ * PRECISION: the exclusive upper bound of the random target range for a round —
+ * the target is drawn uniformly from `[1, cap)`. It widens each round until it
+ * reaches `precisionRangeMax`, then stays there forever. That ramp is the whole
+ * difficulty curve: a fresh deck can land anywhere inside a narrow range, and
+ * the pressure is the range outgrowing what your deck can precisely build.
+ */
+export function precisionRangeCap(round: number, cfg: GameConfig): number {
+  const cap = Math.ceil(
+    cfg.precisionRangeStart * Math.pow(cfg.precisionRangeGrowth, round - 1),
+  );
+  return Math.min(cfg.precisionRangeMax, cap);
 }
 
 /** Result of finalizing a round, handed to the UI for animation & flow. */
@@ -210,6 +311,10 @@ export interface EvaluateResult {
   grade: LandGrade;
   /** Focus banked from this land (0 unless a clear near the target). */
   focusEarned: number;
+  /** PRECISION only: HP lost — the absolute distance from the target. */
+  damage?: number;
+  /** PRECISION only: HP remaining after taking that damage. */
+  hpLeft?: number;
 }
 
 export class Game {
@@ -249,11 +354,67 @@ export class Game {
   /** Re-rolls used in the current shop visit (drives the escalating cost). */
   rerollCount = 0;
 
+  // --- precision mode ----------------------------------------------------------
+  /** PRECISION: remaining health. Hits 0 → the run ends. Unused in other modes. */
+  hp = 0;
+
   constructor(cfg: GameConfig = DEFAULT_CONFIG, seed: number = randomSeed()) {
     this.cfg = cfg;
     this.seed = seed;
     this.rng = new Rng(seed);
     this.currentDepth = cfg.startDepth;
+    this.hp = cfg.precisionHp;
+  }
+
+  /** True in the mode where the target is random and misses cost HP. */
+  get isPrecision(): boolean {
+    return this.cfg.mode === "precision";
+  }
+
+  /** PRECISION: the starting/maximum HP (there is no healing). */
+  get maxHp(): number {
+    return this.cfg.precisionHp;
+  }
+
+  /** The round whose clear wins this run (mode-dependent). */
+  get winRound(): number {
+    return winRoundFor(this.cfg.mode);
+  }
+
+  /**
+   * PRECISION: HP this tree would cost if finalized right now. The player is
+   * shown this live, so ending the round is always an informed choice.
+   */
+  get pendingDamage(): number {
+    return Math.abs(this.currentScore - this.target);
+  }
+
+  /**
+   * Whether the round has reached an outcome the player cannot improve on, so it
+   * can finalize itself instead of waiting for a click: the score is at or past
+   * the target.
+   *
+   * This holds in EVERY mode, including precision, and rests on one property of
+   * the current card set: **a placement can never lower the tree's value.** The
+   * only operators are `+` and `×`, every leaf is non-negative (numbers are ≥ 1,
+   * an empty slot contributes its parent's identity — 0 under `+`, 1 under `×`),
+   * and both operators are monotonic in non-negative arguments. Filling a slot
+   * can only raise it; placing an operator on a leaf `n` yields `n + 0` or
+   * `n × 1` and leaves it unchanged.
+   *
+   * So a score that has reached the target can only move further away from it.
+   * In the target-clearing modes that means further overshoot; in precision it
+   * means strictly more damage. Either way there is nothing left to decide.
+   *
+   * ⚠️ **This is exactly what a subtraction (or division) card would break.**
+   * With a `−` card an overshoot becomes recoverable, and precision in particular
+   * would need to go back to stopping only on an exact hit — otherwise the round
+   * would resolve itself before the player could correct. `tests/precisionmode.
+   * test.ts` pins the monotonicity property, so adding such a card fails a test
+   * rather than silently changing when rounds end.
+   */
+  get shouldAutoScore(): boolean {
+    return this.currentScore >= this.target;
   }
 
   // --- run lifecycle ----------------------------------------------------------
@@ -268,13 +429,18 @@ export class Game {
     this.roundsCleared = 0;
     this.currentDepth = this.cfg.startDepth;
     this.focus = 0;
+    this.hp = this.cfg.precisionHp;
     this.lastResult = null;
     this.startRound();
   }
 
   private startRound(): void {
     this.phase = "playing";
-    this.target = targetForRound(this.round, this.cfg);
+    // Precision draws a fresh random target from a widening range; the other
+    // modes follow a fixed rising curve.
+    this.target = this.isPrecision
+      ? this.rng.int(1, precisionRangeCap(this.round, this.cfg) - 1)
+      : targetForRound(this.round, this.cfg);
     this.tree = newTree();
     this.roundDeck = this.rng.shuffle(this.deck);
     this.hand = [];
@@ -388,6 +554,7 @@ export class Game {
 
   /** Finalize the round: score the tree, grade the land, and decide win/lose. */
   evaluate(): EvaluateResult {
+    if (this.isPrecision) return this.evaluatePrecision();
     const score = this.currentScore;
     const { won, grade, focusEarned } = gradeLand(
       score,
@@ -421,6 +588,55 @@ export class Game {
       // shop resumes so a player can keep going). Offers are still generated so
       // "Keep playing" can open the shop.
       this.phase = this.round === WIN_ROUND ? "won" : "shop";
+    } else {
+      this.phase = "gameover";
+    }
+    return result;
+  }
+
+  /**
+   * PRECISION: finalize the round by paying the distance to the target in HP.
+   *
+   * There is no clearing and no failing a round — the run continues as long as
+   * HP remains, so the shop opens every round. Surviving `PRECISION_WIN_ROUND`
+   * wins the run (the mode's own, shorter finish line — see that constant).
+   * Focus is still banked for a precise land, so precision funds the deck AND
+   * saves your life.
+   */
+  private evaluatePrecision(): EvaluateResult {
+    const score = this.currentScore;
+    const { damage, grade, focusEarned } = gradePrecision(score, this.target);
+    this.hp = Math.max(0, this.hp - damage);
+    const survived = this.hp > 0;
+
+    const result: EvaluateResult = {
+      score,
+      target: this.target,
+      won: survived,
+      round: this.round,
+      overshoot: score - this.target,
+      grade,
+      focusEarned,
+      damage,
+      hpLeft: this.hp,
+    };
+    this.lastResult = result;
+    this.bestScore = Math.max(this.bestScore, score);
+    this.focus += focusEarned;
+
+    if (survived) {
+      this.roundsCleared += 1;
+      this.rerollCount = 0;
+      this.offers = generateOffers(
+        this.deck,
+        this.rng,
+        this.round,
+        this.cfg.upgradeChoices,
+        this.cfg.mode,
+      );
+      // Surviving the win round takes the run (fires exactly once — past it the
+      // shop resumes, so "Keep playing" carries on endlessly as in classic).
+      this.phase = this.round === PRECISION_WIN_ROUND ? "won" : "shop";
     } else {
       this.phase = "gameover";
     }
@@ -544,12 +760,13 @@ export class Game {
       currentDepth: this.currentDepth,
       focus: this.focus,
       rerollCount: this.rerollCount,
+      hp: this.hp,
     };
   }
 
   /** Rebuild a Game from a {@link serialize} snapshot, restoring the RNG state. */
   static fromSnapshot(s: GameSnapshot): Game {
-    const g = new Game(s.cfg, s.seed);
+    const g = new Game(migrateConfig(s.cfg), s.seed);
     g.rng.loadState(s.rngState);
     g.phase = s.phase;
     g.deck = s.deck;
@@ -567,8 +784,48 @@ export class Game {
     g.currentDepth = s.currentDepth;
     g.focus = s.focus;
     g.rerollCount = s.rerollCount;
+    // `hp` post-dates the first save format. Saves written before precision mode
+    // existed are all classic/functions runs, which never read it, so falling
+    // back to full HP keeps those saves loadable rather than invalidating them.
+    g.hp = s.hp ?? s.cfg.precisionHp ?? DEFAULT_CONFIG.precisionHp;
     return g;
   }
+}
+
+/**
+ * Config keys as they were spelled while the Precision mode was briefly called
+ * "Survival" (pre-release, so this only ever affects a local playtest save).
+ * Safe to delete once no such saves can be in the wild.
+ */
+interface LegacySurvivalConfig {
+  survivalHp?: number;
+  survivalRangeStart?: number;
+  survivalRangeGrowth?: number;
+  survivalRangeMax?: number;
+}
+
+/**
+ * Bring a snapshot's config up to the current field names. Without this an
+ * in-progress "survival" run would reload as an unrecognised mode: no HP, no
+ * random target, and a `maxHp` of `undefined`.
+ */
+function migrateConfig(cfg: GameConfig): GameConfig {
+  const legacy = cfg as GameConfig & LegacySurvivalConfig;
+  // Widened to `string`: "survival" is no longer part of the GameMode union, so
+  // a direct comparison would be a type error rather than the check we want.
+  const wasSurvival = (cfg.mode as string) === "survival";
+  if (!wasSurvival && legacy.survivalHp === undefined) return cfg;
+  return {
+    ...cfg,
+    mode: wasSurvival ? "precision" : cfg.mode,
+    precisionHp: cfg.precisionHp ?? legacy.survivalHp ?? DEFAULT_CONFIG.precisionHp,
+    precisionRangeStart:
+      cfg.precisionRangeStart ?? legacy.survivalRangeStart ?? DEFAULT_CONFIG.precisionRangeStart,
+    precisionRangeGrowth:
+      cfg.precisionRangeGrowth ?? legacy.survivalRangeGrowth ?? DEFAULT_CONFIG.precisionRangeGrowth,
+    precisionRangeMax:
+      cfg.precisionRangeMax ?? legacy.survivalRangeMax ?? DEFAULT_CONFIG.precisionRangeMax,
+  };
 }
 
 /** A complete JSON-serializable snapshot of a run (see {@link Game.serialize}). */
@@ -592,4 +849,6 @@ export interface GameSnapshot {
   currentDepth: number;
   focus: number;
   rerollCount: number;
+  /** Precision HP. Optional: saves predating precision mode don't carry it. */
+  hp?: number;
 }

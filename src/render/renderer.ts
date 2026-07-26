@@ -88,6 +88,17 @@ const THEME = {
   panelStroke: "rgba(120,150,255,0.35)",
   accent: "#7CF29B",
   danger: "#ff6b8a",
+  /**
+   * Precision mode's "about to be spent" health — the slice of the HP bar the
+   * pending analyze would cost. Deliberately a DULL, desaturated maroon rather
+   * than `danger`: at low HP the remaining-health fill is itself `danger`, so
+   * sharing the colour made the two segments indistinguishable exactly when
+   * reading them matters most. Muted also carries the right meaning — this HP is
+   * not gone yet.
+   */
+  pending: "#93505f",
+  /** Readable text version of `pending` (the same hue, lifted for 12px type). */
+  pendingText: "#d98c9d",
 };
 
 export class Renderer {
@@ -762,6 +773,15 @@ export class Renderer {
     depth?: number;
     maxDepth?: number;
     focus?: number;
+    /**
+     * Precision mode: current / maximum HP. When present the bottom bar becomes a
+     * health bar (there is nothing to "clear", so score-vs-target progress isn't
+     * the thing to watch) and the centre sub-line shows what finalizing now costs.
+     */
+    hp?: number;
+    maxHp?: number;
+    /** Precision mode: HP the current tree would cost if analyzed right now. */
+    pendingDamage?: number;
   }): { muteRect: Rect } {
     const ctx = this.ctx;
     const h = this.hudHeight;
@@ -769,9 +789,15 @@ export class Renderer {
     ctx.fillRect(0, 0, this.width, h);
 
     const pad = 18;
-    // Left: round, then the current tree-depth cap.
+    const precisionHud = info.hp !== undefined && info.maxHp !== undefined;
+    // Left: round, then the current tree-depth cap. In precision that second slot
+    // goes to HP instead — the HUD has no room for both on a phone, and depth is
+    // already shown by the red beam under the tree and the shop's Grow button,
+    // whereas HP is the number the whole mode turns on.
     this.drawStat(pad, h / 2, "ROUND", String(info.round), "left");
-    if (info.depth !== undefined) {
+    if (precisionHud) {
+      this.drawStat(pad + 66, h / 2, "HP", String(info.hp), "left");
+    } else if (info.depth !== undefined) {
       this.drawStat(pad + 66, h / 2, "DEPTH", String(info.depth), "left");
     }
     // Right cluster: mute button, then DECK, then FOCUS — laid out from the
@@ -806,29 +832,79 @@ export class Renderer {
     const midX = this.width / 2;
     const leftEnd = pad + 120; // right edge of the ROUND/DEPTH cluster
     const centerMaxW = Math.max(40, 2 * Math.min(midX - leftEnd, focusLeft - midX));
-    const reached = info.score >= info.target;
-    ctx.fillStyle = reached ? THEME.accent : THEME.text;
+    // Classic highlights "you've reached the target"; precision highlights "you
+    // are exactly ON it", since passing the target is just as costly as missing.
+    const onTarget = precisionHud ? info.score === info.target : info.score >= info.target;
+    ctx.fillStyle = onTarget ? THEME.accent : THEME.text;
     ctx.font = `800 ${Math.min(34, h * 0.42)}px ${FONT}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "alphabetic";
     ctx.fillText(groupNumber(info.score), midX, h * 0.5, centerMaxW);
-    ctx.fillStyle = THEME.textDim;
     ctx.font = `600 ${Math.min(15, h * 0.2)}px ${FONT}`;
-    ctx.fillText(`/ ${groupNumber(info.target)} to clear`, midX, h * 0.74, centerMaxW);
+    if (precisionHud) {
+      // Name the target outright. It used to share this line with the pending
+      // damage ("/ 431 · −7 HP"), which read as one confusing quantity — the
+      // damage now lives on the health-bar row instead.
+      ctx.fillStyle = onTarget ? THEME.accent : "#FFC46B";
+      ctx.fillText(`TARGET  ${groupNumber(info.target)}`, midX, h * 0.74, centerMaxW);
+    } else {
+      ctx.fillStyle = THEME.textDim;
+      ctx.fillText(`/ ${groupNumber(info.target)} to clear`, midX, h * 0.74, centerMaxW);
+    }
+    ctx.fillStyle = THEME.textDim;
     ctx.font = `600 ${Math.min(12, h * 0.16)}px ${FONT}`;
     ctx.fillText("SCORE", midX, h * 0.24, centerMaxW);
 
-    // progress bar under center
-    const barW = Math.min(280, this.width * 0.4);
-    const barX = midX - barW / 2;
+    // Bottom row. In precision it's the health bar — the only resource that ends
+    // the run — with the pending cost of analyzing right now sitting at the far
+    // right of the same row, deliberately away from the target. The cost is also
+    // previewed on the bar itself as a red segment eating into the green, so the
+    // damage reads as "this much of your health" and not just a number. In the
+    // other modes the row stays the narrow centred progress-toward-target bar.
     const barY = h - 8;
-    ctx.fillStyle = "rgba(255,255,255,0.12)";
-    roundRect(ctx, barX, barY, barW, 4, 2);
-    ctx.fill();
-    const frac = clamp01(info.target ? info.score / info.target : 0);
-    ctx.fillStyle = reached ? THEME.accent : THEME.number.a;
-    roundRect(ctx, barX, barY, barW * frac, 4, 2);
-    ctx.fill();
+    let barW = precisionHud ? this.width - 2 * pad : Math.min(280, this.width * 0.4);
+    const barX = precisionHud ? pad : midX - barW / 2;
+
+    if (precisionHud) {
+      // The label shows the TRUE distance even when it exceeds remaining HP —
+      // "−400 HP" on 5 HP left is the honest warning. The bar clamps to what is
+      // actually there to drain.
+      const dmg = info.pendingDamage ?? 0;
+      const drained = Math.min(dmg, info.hp!);
+      const costLabel = dmg > 0 ? `−${groupNumber(dmg)} HP` : "no damage";
+      ctx.font = `700 12px ${FONT}`;
+      ctx.textAlign = "right";
+      ctx.fillStyle = dmg > 0 ? THEME.pendingText : THEME.accent;
+      // Baseline sits below the mute button and clear of the TARGET line above.
+      ctx.fillText(costLabel, this.width - pad, h - 2);
+      barW -= ctx.measureText(costLabel).width + 10;
+      ctx.textAlign = "center";
+
+      const max = info.maxHp! > 0 ? info.maxHp! : 1;
+      const survivingFrac = clamp01((info.hp! - drained) / max);
+      const damageFrac = clamp01(drained / max);
+      ctx.fillStyle = "rgba(255,255,255,0.12)";
+      roundRect(ctx, barX, barY, Math.max(0, barW), 4, 2);
+      ctx.fill();
+      // Health that would remain, then the slice this analyze would cost.
+      ctx.fillStyle =
+        survivingFrac > 0.5 ? THEME.accent : survivingFrac > 0.25 ? "#FFC46B" : THEME.danger;
+      roundRect(ctx, barX, barY, barW * survivingFrac, 4, 2);
+      ctx.fill();
+      if (damageFrac > 0) {
+        ctx.fillStyle = THEME.pending;
+        roundRect(ctx, barX + barW * survivingFrac, barY, barW * damageFrac, 4, 2);
+        ctx.fill();
+      }
+    } else {
+      ctx.fillStyle = "rgba(255,255,255,0.12)";
+      roundRect(ctx, barX, barY, barW, 4, 2);
+      ctx.fill();
+      const frac = clamp01(info.target ? info.score / info.target : 0);
+      ctx.fillStyle = onTarget ? THEME.accent : THEME.number.a;
+      roundRect(ctx, barX, barY, barW * frac, 4, 2);
+      ctx.fill();
+    }
 
     return { muteRect };
   }

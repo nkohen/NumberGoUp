@@ -12,10 +12,18 @@ upgrade your deck, and see how far the number will go.
 ![title](docs/screenshots/title.png)
 ![playing](docs/screenshots/playing.png)
 
-There are two modes, chosen from the title screen:
-- **Classic** — numbers and `+`/`×` (the original spec).
-- **Functions** — adds the variable `x` and an evaluate operator `ƒ`, so you can
-  build a polynomial and evaluate it at a point: `ƒ(x×x, 3) = 9`.
+Two modes are playable from the title screen:
+- **Classic** — numbers and `+`/`×` (the original spec). Clear a rising target
+  each round; fall short and the run ends.
+- **Precision** — same cards, different goal. The target is **random** each round
+  and you have **100 HP**: finalizing costs HP equal to your *distance* from the
+  target, over or under. Nothing to clear, nothing to heal — survive round 20 to
+  win.
+
+A third mode, **Functions** (the variable `x` plus an evaluate operator `ƒ`, so
+you can build a polynomial and evaluate it at a point: `ƒ(x×x, 3) = 9`), is
+implemented but **not on the menu yet** — it's unfinished. In dev you can still
+start it with `window.__app.startRun("functions")`.
 
 ![functions](docs/screenshots/functions.png)
 
@@ -79,6 +87,18 @@ lives in [`vite.config.ts`](vite.config.ts) (VitePWA) and
 5. **Clear & upgrade.** Beat the target to clear the round and pick one of three
    deck upgrades (add a card, thin a weak card, or promote a number). Targets
    keep rising — the run ends when you fall short.
+
+In **Precision mode** steps 4–5 change: the target is random each round and
+overshooting hurts as much as falling short, so while you're *under* the target
+you decide when to stop — hit **Analyze**, labelled with the HP it will cost. The
+round still resolves itself the moment you reach or pass the target, because no
+play can bring a score back down (there's no subtraction), so there'd be nothing
+left to decide. That cost is your distance from the target in *either* direction,
+taken out of a 100 HP pool that never heals. You always move on to the shop; the
+run ends only when the HP does. The range the target is drawn from widens every
+round (10 → 1000 by round 17), so the pressure is it outgrowing what your deck
+can precisely build — and **surviving round 20 wins the run**. See
+[`docs/GAME_DESIGN.md`](docs/GAME_DESIGN.md#precision) for the tuning.
 
 In **Functions mode** there are two extra cards: `x` (a variable leaf that fills
 a `0`-slot) and `ƒ` (evaluate). Playing `ƒ` on a leaf makes `ƒ(F, a)` — the left

@@ -110,6 +110,35 @@ softer/retro/chiptune, a background music loop)?
   a big point), so it may deserve its own target curve / starter deck rather than
   sharing Classic's. Want me to tune it separately once you've played?
 
+- **Q16. Precision tuning + the round-20 win.** Precision now WINS on surviving
+  round 20, because unlike classic it can't be left endless: its target range
+  stops widening at round 17 and nothing else escalates, so a precise enough deck
+  would face no opposition forever. Adding that finish line forced a re-tune —
+  the win has to be reachable, but must not land before the range finishes
+  widening (or you'd win without ever seeing [1, 1000)). `precisionRangeGrowth`
+  went 1.40 → **1.35**: full range at r17, so rounds 17-20 are the endgame.
+  Modelled win rates at r20 (greedy semi-skilled sim, 100 trials): 1.40 → 0%
+  (its best run ever was 19 — literally unwinnable), 1.35 → 3%, 1.30 → 11%,
+  1.25 → 30% but the full range never arrives. The sim is myopic, so a human
+  should do much better; still, **this is the number to check first when you
+  playtest.** If nobody can win, drop toward 1.30; if you'd rather winning were
+  elite-only, push back toward 1.40. `npx vite-node tools/precisionmode.ts 1.3
+  1.35 1.4` re-runs the table.
+- **Q17. Subtraction.** You mentioned maybe adding a `−` card. Worth knowing it
+  interacts with precision's auto-analyze: today the round resolves the moment you
+  reach or pass the target, which is only safe because no play can lower the
+  score. A `−` card makes an overshoot recoverable, so precision would need to go
+  back to resolving only on an exact hit (one line in `Game.shouldAutoScore`).
+  A monotonicity test guards this — adding `−` turns it red on purpose rather
+  than silently changing when rounds end. Subtraction would also make precision
+  substantially easier (you could always walk a miss back), so it'd likely want
+  a steeper `precisionRangeGrowth` alongside.
+- **Q18. Precision and focus.** Precision currently pays twice in precision: a
+  close land both costs less HP *and* banks ◆ focus on the same bands. That
+  makes precision the single dominant skill. Alternative: no focus from landing
+  (earn it only by skipping the shop), so growing the tree is a real sacrifice.
+  Wanted the double-dip, or is it too generous?
+
 ## What's done and verified
 
 - ✅ Full game loop: title → play → evaluate (merge animation) → shop → next
@@ -121,8 +150,11 @@ softer/retro/chiptune, a background music loop)?
 - ✅ **Functions mode**: variable `x` + evaluate operator `ƒ`, with an
   environment-aware merge animation (the `x` leaves visibly resolve to the point
   they're evaluated at). Verified building `ƒ(x×x, 3) = 9` in-browser.
-- ✅ 38 passing unit tests on the pure core; type-checks; production build is
-  ~12 KB gzipped with zero runtime deps.
+- ✅ **Precision mode**: random target each round from a widening range, 100 HP,
+  damage = distance from the target (either direction), manual **Analyze** to
+  finalize, endless until the HP runs out. Classic is untouched.
+- ✅ 83 passing unit tests on the pure core; type-checks; production build is
+  ~26 KB gzipped with zero runtime deps.
 - ✅ Verified end-to-end in headless Chrome (screenshots in `docs/screenshots/`).
 
 See [`docs/`](docs/) for design, game-design, and architecture write-ups. Every

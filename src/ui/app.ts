@@ -10,7 +10,7 @@
  *   shop       → pick one of three deck upgrades (or skip)
  *   gameover   → run summary; only exit is back to the title
  */
-import { Game, GameConfig, GameMode, LandGrade, gradeLand, configForMode, targetForRound, MAX_DEPTH, WIN_ROUND } from "../core/game";
+import { Game, GameConfig, GameMode, LandGrade, gradeLand, gradePrecision, configForMode, targetForRound, precisionRangeCap, MAX_DEPTH } from "../core/game";
 import { VictoryBubbles } from "./victory";
 import { Card, cardLabel, numberCard, opCard } from "../core/cards";
 import type { Upgrade } from "../core/upgrades";
@@ -85,10 +85,12 @@ interface UiBoxes {
   handRects: HandCardRect[];
   nodeCircles: NodeCircle[];
   redrawBtn?: Rect;
+  /** Precision only: manual finalize (precision never auto-scores on target). */
+  analyzeBtn?: Rect;
   homeBtn?: Rect;
   muteRect?: Rect;
   classicBtn?: Rect;
-  functionsBtn?: Rect;
+  precisionBtn?: Rect;
   helpBtn?: Rect;
   tutorialBtn?: Rect;
   deckBtn?: Rect;
@@ -257,9 +259,9 @@ export class App {
         } else if (this.ui.classicBtn && pointInRect(x, y, this.ui.classicBtn)) {
           sound.click();
           this.startRun("classic");
-        } else if (this.ui.functionsBtn && pointInRect(x, y, this.ui.functionsBtn)) {
+        } else if (this.ui.precisionBtn && pointInRect(x, y, this.ui.precisionBtn)) {
           sound.click();
-          this.startRun("functions");
+          this.startRun("precision");
         } else if (this.ui.tutorialBtn && pointInRect(x, y, this.ui.tutorialBtn)) {
           sound.click();
           this.startTutorial();
@@ -323,6 +325,10 @@ export class App {
       return;
     }
     // Buttons first.
+    if (this.ui.analyzeBtn && pointInRect(x, y, this.ui.analyzeBtn)) {
+      this.beginEvaluate();
+      return;
+    }
     if (this.ui.redrawBtn && pointInRect(x, y, this.ui.redrawBtn)) {
       const cost = this.game.redrawCost;
       if (this.game.redraw()) {
@@ -650,6 +656,12 @@ export class App {
     this.hintShown = true;
     sound.click();
     this.invalidate();
+    // Every other route into the playing screen resolves first; resuming must
+    // too. A play autosaves BEFORE it auto-resolves, so a save captured at that
+    // instant can hold a tree already at/over the target (or an unplayable
+    // hand) — without this the round would resume stuck, waiting on a click
+    // that the mode may not even offer.
+    this.maybeAutoResolve();
   }
 
   /** Title-screen "Continue": resume the most recent local autosave. */
@@ -729,6 +741,9 @@ export class App {
       grade: result.grade,
       focusEarned: result.focusEarned,
       focusTotal: this.game.focus,
+      damage: result.damage,
+      hpLeft: result.hpLeft,
+      manual: !auto,
       model: this.game.cfg.precisionModel,
       depthCap: this.game.currentDepth,
       depth,
@@ -752,11 +767,16 @@ export class App {
   /**
    * After any board change, resolve the round automatically instead of making
    * the player click:
-   *  - **Target reached** → auto-evaluate. Precision means any further play only
-   *    overshoots, so stopping the instant you clear is the optimal land.
+   *  - **Target reached** (`Game.shouldAutoScore`) → auto-evaluate, in every
+   *    mode. No placement can lower the score (see that getter), so once you're
+   *    at or past the target the outcome can only get worse — an overshoot in
+   *    the target-clearing modes, more damage in precision. Precision's Analyze
+   *    button therefore only matters while you are still UNDER the target, which
+   *    is where its real decision lives: stop short, or risk going past.
    *  - **No legal move left** anywhere in the remaining pool (re-draws included)
-   *    → auto-evaluate too. The tree can't grow, so the run ends here; the
-   *    existing evaluate→game-over animation plays without a forced click.
+   *    → auto-evaluate too, in every mode. The tree can't grow and no re-draw can
+   *    change that, so there is no decision left to protect — the round is over
+   *    whether or not the player clicks.
    *  - **Unplayable hand, but the deck can still progress** → auto-redraw. A
    *    hand with no legal move where a re-draw is free is not a real decision;
    *    forcing the player to click the free "Redraw" button just to continue
@@ -765,13 +785,22 @@ export class App {
   private maybeAutoResolve(): void {
     if (this.screen !== "playing" || this.evalAnim) return;
     const g = this.game;
-    if (g.currentScore >= g.target) {
+    if (g.shouldAutoScore) {
       // Auto-complete applies in the tutorial too, so it matches the real game
       // (no Evaluate button, no click — reaching the target just scores).
+      // Precision says so out loud: its round otherwise waits for a click, so a
+      // sudden resolve needs a reason attached.
+      if (g.isPrecision) {
+        this.flash(
+          g.pendingDamage === 0 ? "Exact hit! Analyzing…" : "Past the target — analyzing…",
+        );
+      }
       this.beginEvaluate(true);
     } else if (!this.tutorialActive && !g.canProgress()) {
       // The stuck→game-over path stays disabled in the scripted tutorial.
-      this.flash("No legal moves left — evaluating…");
+      this.flash(
+        g.isPrecision ? "No legal moves left — analyzing…" : "No legal moves left — evaluating…",
+      );
       this.beginEvaluate(true);
     } else if (!this.tutorialActive && !g.canPlayAny()) {
       // Hand has no legal move but the round can still progress (a playable
@@ -948,10 +977,13 @@ export class App {
       this.ui.classicBtn = classicBtn;
     }
 
-    // Functions mode is not ready to share yet — disabled placeholder.
-    const funcBtn = stack(46);
-    r.drawButton(funcBtn, "ƒ  Functions  (soon)", { enabled: false });
-    this.ui.functionsBtn = undefined;
+    // Functions mode is implemented (core, upgrades, tests) but not surfaced —
+    // it's unfinished, and a greyed-out button was just menu noise. Reachable in
+    // dev via `window.__app.startRun("functions")`; put a button back here when
+    // it's ready to play.
+    const precisionBtn = stack(46);
+    r.drawButton(precisionBtn, "🎯  Precision");
+    this.ui.precisionBtn = precisionBtn;
 
     // Tutorial + How-to-play, side by side.
     const rowY = y;
@@ -980,9 +1012,13 @@ export class App {
 
   private drawRulesPanel(): void {
     const r = this.renderer;
-    const depth = this.game.currentDepth;
+    const g = this.game;
+    const depth = g.currentDepth;
+    const precision = g.isPrecision;
     const lines = [
-      "Build an arithmetic tree to reach the target score.",
+      precision
+        ? "Build an arithmetic tree to land ON the target score."
+        : "Build an arithmetic tree to reach the target score.",
       "",
       "• Each turn: draw 5 cards, play ONE, the rest go back.",
       "• Number cards (1,2…) fill empty bubbles.",
@@ -990,20 +1026,47 @@ export class App {
       "   sprouting a fresh empty bubble to fill.",
       "• An unfilled bubble counts as its parent's identity:",
       "   1 under × (so × never zeroes you), 0 under +.",
-      "• Reaching the target scores automatically — no click.",
+      precision
+        ? "• Going past the target is just as bad as falling short,"
+        : "• Reaching the target scores automatically — no click.",
+      ...(precision
+        ? [
+            "   so YOU choose when to stop: hit Analyze. (Reaching or",
+            "   passing the target analyzes for you — you can't come back",
+            "   down, so there'd be nothing left to decide.)",
+          ]
+        : []),
       "• Re-draw your hand to fish for a card (e.g. a ×) —",
       "   free when stuck, else a small ◆ cost that rises.",
       `• The tree is ${depth} levels deep for now (up to ${2 ** depth} numbers) —`,
       "   grow it deeper by spending focus in the shop.",
       "",
-      "PRECISION — clear by as LITTLE as possible to bank ◆ focus:",
-      "   PERFECT (exactly on target)   → +5 ◆",
-      "   SHARP   (within  5% over)     → +4 ◆",
-      "   CLOSE   (within 10% over)     → +3 ◆",
-      "   NEAR    (within 15% over)     → +2 ◆",
-      "   LOOSE   (within 20% over)     → +1 ◆",
-      "   CLEARED (more than 20% over)  → +0 ◆",
-      "   UNDERSHOOT the target         → the run ends!",
+      ...(precision
+        ? [
+            `PRECISION — you have ${g.maxHp} HP and there is no healing.`,
+            "Each round the target is RANDOM, and analyzing costs HP",
+            "equal to your DISTANCE from it — over or under, same cost.",
+            "The range the target is drawn from widens every round,",
+            `up to 1 – ${(g.cfg.precisionRangeMax - 1).toLocaleString()}.`,
+            "",
+            "Closeness also banks ◆ focus (distance from target):",
+            "   PERFECT (exactly on it)  → +5 ◆",
+            "   SHARP   (within  5%)     → +4 ◆",
+            "   CLOSE   (within 10%)     → +3 ◆",
+            "   NEAR    (within 15%)     → +2 ◆",
+            "   LOOSE   (within 20%)     → +1 ◆",
+            "   further out              → +0 ◆",
+          ]
+        : [
+            "PRECISION — clear by as LITTLE as possible to bank ◆ focus:",
+            "   PERFECT (exactly on target)   → +5 ◆",
+            "   SHARP   (within  5% over)     → +4 ◆",
+            "   CLOSE   (within 10% over)     → +3 ◆",
+            "   NEAR    (within 15% over)     → +2 ◆",
+            "   LOOSE   (within 20% over)     → +1 ◆",
+            "   CLEARED (more than 20% over)  → +0 ◆",
+            "   UNDERSHOOT the target         → the run ends!",
+          ]),
       "",
       "• Skip a shop upgrade to bank +1 ◆.",
       "• Spend ◆ to GROW the tree one level deeper — OR take a",
@@ -1011,7 +1074,10 @@ export class App {
       "• Re-roll the shop (⟳) with ◆ to fish for a card.",
       "• 💾 Save writes a save file; runs also autosave, so",
       "   \"Continue\" on the title resumes where you left off.",
-      "• Targets keep rising — clear round 30 to WIN.",
+      precision
+        ? `• Survive round ${g.winRound} to WIN — the range stops widening`
+        : `• Targets keep rising — clear round ${g.winRound} to WIN.`,
+      ...(precision ? ["   before then, so the last rounds are pure accuracy."] : []),
     ];
     // Only explain the Functions-mode cards when actually playing that mode.
     if (this.game.cfg.mode === "functions") {
@@ -1425,6 +1491,16 @@ export class App {
     this.ui.tutSkip = undefined;
   }
 
+  /**
+   * The precision-only HUD fields (health + what finalizing now would cost).
+   * Empty in the other modes, whose HUD has no health bar to draw.
+   */
+  private precisionHudInfo(): { hp?: number; maxHp?: number; pendingDamage?: number } {
+    const g = this.game;
+    if (!g.isPrecision) return {};
+    return { hp: g.hp, maxHp: g.maxHp, pendingDamage: g.pendingDamage };
+  }
+
   private drawPlaying(dt: number, background = false): void {
     if (!background) this.resetUi();
     const r = this.renderer;
@@ -1459,6 +1535,7 @@ export class App {
       depth: g.currentDepth,
       maxDepth: g.currentDepth,
       focus: g.focus,
+      ...this.precisionHudInfo(),
     });
 
     if (!background) {
@@ -1496,12 +1573,22 @@ export class App {
     const res = place(g.tree, this.hoverNodeId, this.drag.card, g.currentDepth);
     if (!res) return;
     const score = evaluate(res.tree.root);
-    const { grade, won } = gradeLand(score, g.target, g.cfg.precisionModel);
 
     const r = this.renderer;
     const ctx = r.ctx;
-    const label = `→ ${score.toLocaleString()}`;
-    const color = won ? gradeColor(grade) : "#ff6b8a";
+    let label: string;
+    let color: string;
+    if (g.isPrecision) {
+      // Precision can miss from either side, so the chip shows the HP this drop
+      // would cost — the number the decision actually turns on.
+      const { damage, grade } = gradePrecision(score, g.target);
+      label = damage === 0 ? `→ ${score.toLocaleString()}  ✓` : `→ ${score.toLocaleString()}  −${damage.toLocaleString()}`;
+      color = gradeColor(grade);
+    } else {
+      const { grade, won } = gradeLand(score, g.target, g.cfg.precisionModel);
+      label = `→ ${score.toLocaleString()}`;
+      color = won ? gradeColor(grade) : "#ff6b8a";
+    }
 
     ctx.save();
     ctx.font = "800 16px sans-serif";
@@ -1533,19 +1620,36 @@ export class App {
   }
 
   private layoutPlayControls(): void {
-    const y = this.renderer.hudHeight + 8;
-    // Redraw button: free when stuck (safety net), otherwise a paid "fish" to
-    // hunt for a card (e.g. a ×). Shown whenever a re-draw is possible.
-    // (Rounds auto-resolve on clearing the target or getting stuck, so there is
-    // no manual Evaluate button.)
-    this.ui.redrawBtn = this.game.canRedraw() ? { x: 12, y, w: 148, h: 44 } : undefined;
+    const r = this.renderer;
+    const y = r.hudHeight + 8;
 
-    // Home button: square icon in the top-right, opposite the redraw button. The
-    // run autosaves continuously, so this is a non-destructive exit ("Continue"
-    // on the title picks it up). Hidden during the tutorial to keep it focused.
+    // Home button: square icon in the top-right. The run autosaves continuously,
+    // so this is a non-destructive exit ("Continue" on the title picks it up).
+    // Hidden during the tutorial to keep it focused.
     this.ui.homeBtn = this.tutorialActive
       ? undefined
-      : { x: this.renderer.width - 12 - 44, y, w: 44, h: 44 };
+      : { x: r.width - 12 - 44, y, w: 44, h: 44 };
+
+    // Analyze (precision only): that mode never scores on its own, so this is the
+    // ONLY way to finish a round — it gets first claim on the top row, and the
+    // redraw button yields space to it rather than the other way round.
+    // (Classic/functions auto-resolve, so they have no manual finalize button.)
+    const rightEdge = (this.ui.homeBtn?.x ?? r.width - 12) - 8;
+    if (this.game.isPrecision && !this.tutorialActive) {
+      const w = Math.min(168, rightEdge - 12);
+      this.ui.analyzeBtn = { x: rightEdge - w, y, w, h: 44 };
+    } else {
+      this.ui.analyzeBtn = undefined;
+    }
+
+    // Redraw: free when stuck (safety net), otherwise a paid "fish" to hunt for a
+    // card (e.g. a ×). Shown whenever a re-draw is possible AND it still fits
+    // beside Analyze. Dropping it on a very narrow screen is safe: an unplayable
+    // hand auto-redraws (see maybeAutoResolve), so only the optional paid fish is
+    // lost, never the ability to continue the round.
+    const redrawW = Math.min(148, (this.ui.analyzeBtn?.x ?? rightEdge + 8) - 10 - 12);
+    this.ui.redrawBtn =
+      this.game.canRedraw() && redrawW >= 96 ? { x: 12, y, w: redrawW, h: 44 } : undefined;
 
     const btnY = this.renderer.height - this.renderer.handHeight - 44;
     this.ui.helpBtn = { x: 12, y: btnY, w: 40, h: 36 };
@@ -1555,6 +1659,24 @@ export class App {
 
   private drawPlayControls(): void {
     const r = this.renderer;
+    if (this.ui.analyzeBtn) {
+      // Label the button with what it will cost, so committing is never a
+      // guess: an exact land is the "primary" (pulsing) state worth holding out
+      // for, anything else spells out the HP it will take.
+      const dmg = this.game.pendingDamage;
+      const wide = this.ui.analyzeBtn.w >= 140;
+      // The ✓ is reserved for a free (exact) land — putting it next to an HP
+      // cost would read as reassurance for a move that actually hurts.
+      const label =
+        dmg === 0
+          ? wide
+            ? "Analyze ✓  exact!"
+            : "Analyze ✓"
+          : wide
+            ? `Analyze  −${dmg.toLocaleString()} HP`
+            : `Analyze −${dmg.toLocaleString()}`;
+      r.drawButton(this.ui.analyzeBtn, label, { primary: dmg === 0, time: this.time });
+    }
     if (this.ui.redrawBtn) {
       const cost = this.game.redrawCost;
       const label = cost > 0 ? `↻ Redraw  −${cost} ◆` : "↻ Redraw (free)";
@@ -1589,21 +1711,60 @@ export class App {
   /** Compact overlay listing the current run deck (toggled by the Deck button). */
   private drawDeckPanel(): void {
     const r = this.renderer;
+    const g = this.game;
     const tc = this.deckTypeCounts();
     const detail = this.deckDetailLine();
+    // What's still playable this round: the hand plus the undrawn pile. A played
+    // card is consumed for the rest of the round, so this shrinks as you go and
+    // is what you actually plan the rest of the round against.
+    const left = [...g.hand, ...g.roundDeck];
+    const leftDetail = this.deckDetailLine(left);
+
     const w = Math.min(560, r.width * 0.92);
-    const h = 200;
+    const bodyW = w - 40;
+    // Lay the panel out from the top, then size it to where the content actually
+    // ends. Both breakdowns wrap to more lines as the deck grows, so a fixed
+    // height would clip them (or collide with the close hint).
+    const lineH = 18; // must match wrapText's advance for a 14px line
+    const detailLines = this.wrapLineCount(detail, bodyW, 14);
+    const leftText = leftDetail || "— nothing left —";
+    const leftLines = this.wrapLineCount(leftText, bodyW, 14);
+
+    const yTitle = 40;
+    const ySummary = yTitle + 32;
+    const yDetail = ySummary + 26;
+    const yLeftHead = yDetail + detailLines * lineH + 22;
+    const ySubtitle = yLeftHead + 20;
+    const yLeftDetail = ySubtitle + 20;
+    const contentBottom = yLeftDetail + (leftLines - 1) * lineH;
+    const h = contentBottom + 46; // room for the close hint at h - 20
+
     const rect: Rect = { x: (r.width - w) / 2, y: (r.height - h) / 2, w, h };
+    const cx = rect.x + rect.w / 2;
+
     r.drawDimmer(0.55);
     r.drawPanel(rect);
-    r.text("Your deck", rect.x + rect.w / 2, rect.y + 40, { size: 22, weight: 800 });
-    r.text(tc.summary, rect.x + rect.w / 2, rect.y + 78, {
+    r.text("Your deck", cx, rect.y + yTitle, { size: 22, weight: 800 });
+    r.text(tc.summary, cx, rect.y + ySummary, {
       size: 15,
       weight: 700,
       color: "rgba(234,240,255,0.92)",
     });
-    this.wrapText(detail, rect.x + rect.w / 2, rect.y + 108, rect.w - 40, 14);
-    r.text("(tap anywhere to close)", rect.x + rect.w / 2, rect.y + h - 20, {
+    this.wrapText(detail, cx, rect.y + yDetail, bodyW, 14);
+
+    r.text(
+      `Left to play this round — ${left.length} of ${g.deck.length}`,
+      cx,
+      rect.y + yLeftHead,
+      { size: 15, weight: 700, color: "#8fe4ff" },
+    );
+    r.text("(your hand + the undrawn pile)", cx, rect.y + ySubtitle, {
+      size: 12,
+      color: "rgba(234,240,255,0.5)",
+    });
+    this.wrapText(leftText, cx, rect.y + yLeftDetail, bodyW, 14);
+
+    r.text("(tap anywhere to close)", cx, rect.y + h - 20, {
       size: 12,
       color: "rgba(234,240,255,0.45)",
     });
@@ -1682,6 +1843,7 @@ export class App {
       muted: sound.muted,
       depth: g.currentDepth,
       focus: g.focus,
+      ...this.precisionHudInfo(),
     });
     this.ui.muteRect = muteRect;
 
@@ -1754,15 +1916,28 @@ export class App {
     const textMax = w - 2 * pad;
     // Header block flows from the top with a running cursor.
     let y = panel.y + 30;
-    r.text(`Round ${res?.round ?? g.round} cleared! 🎉`, cx, y, {
-      size: 24,
-      weight: 800,
-      color: "#7CF29B",
-      maxWidth: textMax,
-    });
+    const damage = res?.damage ?? 0;
+    r.text(
+      g.isPrecision
+        ? damage === 0
+          ? `Round ${res?.round ?? g.round} — dead on! 🎯`
+          : `Round ${res?.round ?? g.round} survived`
+        : `Round ${res?.round ?? g.round} cleared! 🎉`,
+      cx,
+      y,
+      {
+        size: 24,
+        weight: 800,
+        color: g.isPrecision && damage > 0 ? "#FFC46B" : "#7CF29B",
+        maxWidth: textMax,
+      },
+    );
     y += 28;
     r.text(
-      `You scored ${(res?.score ?? 0).toLocaleString()} · needed ${(res?.target ?? g.target).toLocaleString()}.`,
+      g.isPrecision
+        ? `Scored ${(res?.score ?? 0).toLocaleString()} · target was ${(res?.target ?? g.target).toLocaleString()}` +
+            ` · −${damage.toLocaleString()} HP  (${res?.hpLeft ?? g.hp} left)`
+        : `You scored ${(res?.score ?? 0).toLocaleString()} · needed ${(res?.target ?? g.target).toLocaleString()}.`,
       cx,
       y,
       { size: 15, color: "rgba(234,240,255,0.8)", maxWidth: textMax },
@@ -1770,10 +1945,14 @@ export class App {
     y += 24;
     // Precision grade + focus banked — the heart of the skill loop.
     if (res) {
+      // "CLEARED" is the out-of-all-bands fallback. That reads fine when the
+      // point was to clear a target, but in precision it would label a wide miss
+      // as a success, so it's shown as WIDE there.
+      const gradeName = g.isPrecision && res.grade === "CLEARED" ? "WIDE" : res.grade;
       const label =
         res.focusEarned > 0
-          ? `${res.grade} LAND    +${res.focusEarned} ◆ focus`
-          : `${res.grade}    +0 ◆ focus`;
+          ? `${gradeName} LAND    +${res.focusEarned} ◆ focus`
+          : `${gradeName}    +0 ◆ focus`;
       r.text(label, cx, y, {
         size: 16,
         weight: 800,
@@ -1782,9 +1961,13 @@ export class App {
       });
       y += 24;
     }
-    // Show the target the chosen upgrade will be tested against next round.
-    const nextTarget = targetForRound(g.round + 1, g.cfg);
-    r.text(`Next round target:  ${nextTarget.toLocaleString()}`, cx, y, {
+    // Show what the chosen upgrade will be tested against next round. In
+    // precision the target isn't known yet — only the range it's drawn from,
+    // which is the thing to build a deck against.
+    const nextLabel = g.isPrecision
+      ? `Next round target:  anywhere in 1 – ${(precisionRangeCap(g.round + 1, g.cfg) - 1).toLocaleString()}`
+      : `Next round target:  ${targetForRound(g.round + 1, g.cfg).toLocaleString()}`;
+    r.text(nextLabel, cx, y, {
       size: 16,
       weight: 800,
       color: "#FFC46B",
@@ -1945,23 +2128,35 @@ export class App {
     const panel: Rect = { x: (r.width - w) / 2, y: (r.height - h) / 2, w, h };
     r.drawPanel(panel);
     const res = g.lastResult;
-    r.text("Game Over", r.width / 2, panel.y + 48, { size: 32, weight: 900, color: "#ff6b8a" });
+    r.text(g.isPrecision ? "Out of HP" : "Game Over", r.width / 2, panel.y + 48, {
+      size: 32,
+      weight: 900,
+      color: "#ff6b8a",
+    });
     r.text(
-      `You reached round ${res?.round ?? g.round}.`,
+      g.isPrecision
+        ? `You survived ${g.roundsCleared} rounds.`
+        : `You reached round ${res?.round ?? g.round}.`,
       r.width / 2,
       panel.y + 96,
       { size: 18 },
     );
     r.text(
-      `Final tree scored ${res?.score ?? 0} · needed ${res?.target ?? g.target}.`,
+      g.isPrecision
+        ? `Final tree scored ${res?.score ?? 0} · target was ${res?.target ?? g.target} · −${res?.damage ?? 0} HP.`
+        : `Final tree scored ${res?.score ?? 0} · needed ${res?.target ?? g.target}.`,
       r.width / 2,
       panel.y + 126,
       { size: 15, color: "rgba(234,240,255,0.75)" },
     );
-    r.text(`Rounds cleared: ${g.roundsCleared}   Best score: ${g.bestScore}`, r.width / 2, panel.y + 156, {
-      size: 15,
-      color: "rgba(234,240,255,0.75)",
-    });
+    r.text(
+      g.isPrecision
+        ? `Best score: ${g.bestScore}   Tree depth: ${g.currentDepth}`
+        : `Rounds cleared: ${g.roundsCleared}   Best score: ${g.bestScore}`,
+      r.width / 2,
+      panel.y + 156,
+      { size: 15, color: "rgba(234,240,255,0.75)" },
+    );
 
     // A loss ends the run — the only way forward is back to the title screen.
     this.ui.restartBtn = undefined;
@@ -2007,9 +2202,20 @@ export class App {
     const panel: Rect = { x: (r.width - w) / 2, y: (r.height - h) / 2, w, h };
     r.drawPanel(panel);
     r.text("YOU WIN! 🎉", r.width / 2, panel.y + 52, { size: 34, weight: 900, color: "#7cf29b" });
-    r.text(`You beat all ${WIN_ROUND} rounds.`, r.width / 2, panel.y + 100, { size: 18 });
     r.text(
-      `Best score: ${g.bestScore.toLocaleString()}`,
+      g.isPrecision
+        ? `You survived all ${g.winRound} rounds.`
+        : `You beat all ${g.winRound} rounds.`,
+      r.width / 2,
+      panel.y + 100,
+      { size: 18 },
+    );
+    r.text(
+      // HP left is the meaningful margin in precision — how close the run ran to
+      // the wire — where classic's is the score it reached.
+      g.isPrecision
+        ? `HP remaining: ${g.hp} / ${g.maxHp}`
+        : `Best score: ${g.bestScore.toLocaleString()}`,
       r.width / 2,
       panel.y + 130,
       { size: 15, color: "rgba(234,240,255,0.75)" },
@@ -2100,12 +2306,17 @@ export class App {
    * A per-card breakdown that avoids the old "2××" ambiguity: cards are listed
    * expanded under type headers, so "×,×" plainly reads as two multiply cards.
    */
-  private deckDetailLine(): string {
+  /**
+   * `Numbers 1,1,2,2   Ops +,×` breakdown of a set of cards. Defaults to the
+   * whole run deck; pass a subset (e.g. what's left to play this round) to
+   * describe that instead.
+   */
+  private deckDetailLine(cards: readonly Card[] = this.game.deck): string {
     const nums: number[] = [];
     const ops: string[] = [];
     const vars: string[] = [];
     const funcs: string[] = [];
-    for (const c of this.game.deck) {
+    for (const c of cards) {
       if (c.kind === "number") nums.push(c.value);
       else if (c.kind === "var") vars.push("x");
       else if (c.op === "@") funcs.push("ƒ");

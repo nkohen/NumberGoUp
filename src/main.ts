@@ -14,6 +14,7 @@ if (!canvas) {
 // The App handles resize, input, the game loop, and all rendering.
 // In dev, allow tuning/repro via URL params:
 //   ?seed=123&baseTarget=1&growth=1.7&hand=5&startdepth=2&precision=continuous
+//   precision mode: ?hp=100&rangestart=10&rangegrowth=1.4&rangemax=1000
 let opts: ConstructorParameters<typeof App>[1] = {};
 if (import.meta.env.DEV) {
   const q = new URLSearchParams(location.search);
@@ -30,6 +31,11 @@ if (import.meta.env.DEV) {
   if (pm === "tiered" || pm === "continuous" || pm === "safety") {
     config.precisionModel = pm;
   }
+  // Precision-mode knobs: HP pool and the widening random-target range.
+  if (num("hp") !== undefined) config.precisionHp = num("hp")!;
+  if (num("rangestart") !== undefined) config.precisionRangeStart = num("rangestart")!;
+  if (num("rangegrowth") !== undefined) config.precisionRangeGrowth = num("rangegrowth")!;
+  if (num("rangemax") !== undefined) config.precisionRangeMax = num("rangemax")!;
   opts = { config: config as Partial<GameConfig>, seed: num("seed") };
 }
 
