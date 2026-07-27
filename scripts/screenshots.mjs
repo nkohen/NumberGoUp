@@ -191,6 +191,47 @@ async function clickPrecision(page) {
   await sleep(500);
 }
 
+/**
+ * The interaction-combinator sandbox (dev-only, /sandbox.html). Captured here
+ * too because it is canvas-drawn and unit tests cannot see layout regressions.
+ * Driven through `window.__inet`, the sandbox's equivalent of `window.__app`.
+ */
+const SANDBOX_SHOTS = [
+  { name: "sandbox-commute", preset: "commute", steps: 0 },
+  { name: "sandbox-dup-tree", preset: "dup-tree", steps: 0 },
+  { name: "sandbox-dup-tree-reduced", preset: "dup-tree", steps: 40 },
+  { name: "sandbox-erase-tree", preset: "erase-tree", steps: 6 },
+  { name: "sandbox-wide-parallel", preset: "wide", steps: 1, parallel: true },
+  { name: "sandbox-diverge", preset: "diverge", steps: 6 },
+];
+
+async function captureSandbox(browser) {
+  for (const vp of VIEWPORTS) {
+    for (const shot of SANDBOX_SHOTS) {
+      const context = await browser.newContext(vp.context);
+      const page = await context.newPage();
+      await page.goto(`${BASE}/sandbox.html?preset=${shot.preset}`, {
+        waitUntil: "networkidle",
+      });
+      await sleep(400);
+      await page.evaluate(
+        ({ steps, parallel }) => {
+          const inet = window.__inet;
+          if (parallel) inet.setParallel(true);
+          inet.reduceAll(steps);
+        },
+        { steps: shot.steps, parallel: !!shot.parallel },
+      );
+      // Let the rewrite animations play out before capturing.
+      await sleep(shot.steps > 0 ? 900 : 500);
+      const file = path.join(OUT, `${vp.name}-${shot.name}.png`);
+      await page.screenshot({ path: file });
+      console.log("✔", path.relative(ROOT, file));
+      await context.close();
+    }
+  }
+}
+
 async function waitForServer(timeoutMs = 20000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -230,7 +271,9 @@ try {
       await context.close();
     }
   }
-  console.log(`\nDone — ${VIEWPORTS.length * SCREENS.length} screenshots in ./screenshots/`);
+  await captureSandbox(browser);
+  const total = VIEWPORTS.length * (SCREENS.length + SANDBOX_SHOTS.length);
+  console.log(`\nDone — ${total} screenshots in ./screenshots/`);
 } catch (err) {
   console.error("✗", err.message);
   if (String(err.message).includes("Executable doesn't exist")) {

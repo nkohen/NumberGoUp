@@ -71,6 +71,54 @@ The responsive layout logic these guard lives in:
 - `src/ui/app.ts` — `drawShop()` / `drawShopOption()` (content-sized cards and
   fitted buttons).
 
+
+## The interaction-combinator sandbox (dev-only)
+
+`npm run screenshots` also captures `*-sandbox-*.png` from `/sandbox.html`, the
+exploratory toy in `src/inet/` (see [INET_NOTES.md](INET_NOTES.md)). It is not
+part of the game and never ships, but it is canvas-drawn, so unit tests cannot
+see its layout either.
+
+What to check:
+
+- **sandbox-commute / sandbox-dup-tree:** the initial layout is a tidy tree —
+  agents on rows, free ports as small hollow rings at the ends of their wires,
+  the active pair's wire glowing green.
+- **agent silhouettes:** γ and δ are curved triangles with a sharp apex pointing
+  UP (the principal port) and two visible corners below (the aux ports), and each
+  wire must leave from a corner, not from a flat edge. ε is a teardrop pointing
+  at its single wire. If the corners look swallowed, the edge bulge in
+  `NetRenderer.agentPath` is too large for the short bottom edge.
+- **agent rotation:** every agent should be turned so its corners face the wires
+  they carry — a child's apex points up at its parent, and the two halves of an
+  active pair face each other. If agents all sit bolt upright, `restAngle` is not
+  being applied.
+- **free ports:** small HOLLOW versions of the single-port shape, each turned to
+  face along its own wire. They must stay obviously unfilled — that is the only
+  thing distinguishing the net's interface from its agents.
+- **wire curvature:** wires should read as near-straight lines wherever both
+  ports already face each other, curving only where a port faces sideways. Big
+  sweeping S-curves between two facing ports mean the alignment term in
+  `drawWires` has regressed.
+- **sandbox-dup-tree (unreduced):** the tidy tree must survive relaxation almost
+  unchanged — rows level, subtrees symmetric. If it sags or leans, the anchor
+  leash in `relaxStep` is too loose and the wire springs are winning.
+- **sandbox-dup-tree-reduced:** agents created by rewrites have no anchor and
+  settle freely, so this is looser than the tidy layout — but it must not be a
+  jumble: no overlapping agents, and wires with visible length rather than a
+  clump. Sibling copies must be *distinguishable* rather than exactly stacked
+  (the fan-out in `NetRenderer.fanOut`).
+- **sandbox-wide-parallel:** eight redexes side by side must stay on one compact
+  band, not stretch a two-level net down the whole canvas. That is what the row
+  height cap in `relayout()` guards.
+- **zoom:** the HUD's `view` row reads `1:1` for anything that fits. A net that
+  outgrows the canvas should zoom OUT to fit (never in past 1:1) and stay
+  centred, with wires still visible rather than fading to hairlines — that is
+  the `stroke()` compensation. Dragging must track the pointer exactly at any
+  zoom; if it slips, the camera is not frozen during the drag.
+- **mobile-sandbox-\*:** the HUD (top left) and the blurb (bottom) must not
+  overlap each other or the hint line.
+
 ## The one thing headless can't catch
 
 Headless Chromium uses a fixed viewport, so it **cannot reproduce iOS Safari's
