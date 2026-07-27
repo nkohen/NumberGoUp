@@ -14,6 +14,7 @@
     "screenshots": "node scripts/screenshots.mjs",
     "icons": "node scripts/make-icons.mjs",
     "benchmark": "node scripts/benchmark.mjs",
+    "inet:stats": "vite-node tools/inet-stats.ts",
     "deploy": "bash scripts/deploy-web.sh"
   },
   "devDependencies": {
