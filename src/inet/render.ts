@@ -45,8 +45,8 @@ import {
   type FreePlacement,
   type Placements,
 } from "./relax";
+import { symbolDef, type Alphabet } from "./alphabet";
 import {
-  ARITY,
   isFree,
   Net,
   portsOf,
@@ -82,11 +82,12 @@ const MIN_RADIUS = 13;
 /** How far the camera will zoom out before it gives up and lets things clip. */
 const MIN_ZOOM = 0.08;
 
-const SYMBOL_STYLE: Record<Sym, { a: string; b: string; glow: string }> = {
-  γ: { a: "#7CF29B", b: "#27B36B", glow: "rgba(124,242,155,0.55)" },
-  δ: { a: "#FFC46B", b: "#F0862B", glow: "rgba(255,196,107,0.55)" },
-  ε: { a: "#ff9be0", b: "#d24fb8", glow: "rgba(255,155,224,0.55)" },
-};
+const FALLBACK_STYLE = { a: "#9fb4e8", b: "#5a6ea8", glow: "rgba(159,180,232,0.5)" };
+
+/** Colours come from the alphabet, so a new symbol set brings its own palette. */
+function styleFor(alphabet: Alphabet, symbol: Sym): { a: string; b: string; glow: string } {
+  return symbolDef(alphabet, symbol)?.color ?? FALLBACK_STYLE;
+}
 
 export interface Point {
   x: number;
@@ -109,6 +110,7 @@ interface AgentView extends AgentPlacement {
 
 interface Ghost extends Point {
   symbol: Sym;
+  arity: number;
   angle: number;
   fromX: number;
   fromY: number;
@@ -583,16 +585,18 @@ export class NetRenderer {
     const born: Born[] = [];
 
     if (kind === "annihilate") {
-      ghosts.push(this.ghost(a.symbol, at, mid, 1, aAngle));
-      ghosts.push(this.ghost(b.symbol, bt, mid, 1, bAngle));
+      ghosts.push(this.ghost(a.symbol, a.arity, at, mid, 1, aAngle));
+      ghosts.push(this.ghost(b.symbol, b.arity, bt, mid, 1, bAngle));
     } else if (kind === "erase") {
       // The eraser slides onto its partner and swallows it.
       const eraserFirst = a.symbol === "ε";
       const ep = eraserFirst ? at : bt;
       const op = eraserFirst ? bt : at;
-      ghosts.push(this.ghost("ε", ep, op, 0.55, eraserFirst ? aAngle : bAngle));
+      const eraser = eraserFirst ? a : b;
+      const eaten = eraserFirst ? b : a;
+      ghosts.push(this.ghost(eraser.symbol, eraser.arity, ep, op, 0.55, eraserFirst ? aAngle : bAngle));
       ghosts.push(
-        this.ghost(eraserFirst ? b.symbol : a.symbol, op, op, 0.55, eraserFirst ? bAngle : aAngle),
+        this.ghost(eaten.symbol, eaten.arity, op, op, 0.55, eraserFirst ? bAngle : aAngle),
       );
       for (const id of newAgents)
         born.push({ id, fromX: op.x, fromY: op.y, delay: 0.5, spreadX: 0, spreadY: 0 });
@@ -600,8 +604,8 @@ export class NetRenderer {
       // Commutation: the two agents pass through each other. Copies of α are
       // born where β was and vice versa, so the pair visibly swaps sides while
       // duplicating.
-      ghosts.push(this.ghost(a.symbol, at, bt, 0.62, aAngle));
-      ghosts.push(this.ghost(b.symbol, bt, at, 0.62, bAngle));
+      ghosts.push(this.ghost(a.symbol, a.arity, at, bt, 0.62, aAngle));
+      ghosts.push(this.ghost(b.symbol, b.arity, bt, at, 0.62, bAngle));
       for (const id of newAgents) {
         const sym = net.agent(id)?.symbol;
         const from = sym === a.symbol ? bt : at;
@@ -685,9 +689,17 @@ export class NetRenderer {
     }
   }
 
-  private ghost(symbol: Sym, from: Point, to: Point, until: number, angle: number): Ghost {
+  private ghost(
+    symbol: Sym,
+    arity: number,
+    from: Point,
+    to: Point,
+    until: number,
+    angle: number,
+  ): Ghost {
     return {
       symbol,
+      arity,
       angle,
       x: from.x,
       y: from.y,
@@ -743,7 +755,7 @@ export class NetRenderer {
 
     this.drawWires(net, active);
     this.drawFreePorts(net);
-    this.drawGhosts();
+    this.drawGhosts(net);
     this.drawAgents(net, active);
     this.drawParticles(dt);
     this.drawSelection();
@@ -928,18 +940,30 @@ export class NetRenderer {
         active.has(agent.id) ? 1 : 0,
         1,
         v.angle,
+        agent.arity,
+        styleFor(net.alphabet, agent.symbol),
       );
     }
   }
 
-  private drawGhosts(): void {
+  private drawGhosts(net: Net): void {
     for (const anim of this.anims) {
       for (const g of anim.ghosts) {
         if (anim.t > g.until) continue;
         // Shrink away over the last stretch of the ghost's life.
         const local = clamp01(anim.t / Math.max(0.001, g.until));
         const shrink = 1 - clamp01((local - 0.7) / 0.3);
-        this.bubble(g.x, g.y, this.radius * shrink, g.symbol, 0, shrink, g.angle);
+        this.bubble(
+          g.x,
+          g.y,
+          this.radius * shrink,
+          g.symbol,
+          0,
+          shrink,
+          g.angle,
+          g.arity,
+          styleFor(net.alphabet, g.symbol),
+        );
       }
     }
   }
@@ -952,8 +976,8 @@ export class NetRenderer {
    * which has no polygon, so it is drawn as a disc pulled to a point at its
    * principal port instead.
    */
-  private agentPath(x: number, y: number, r: number, symbol: Sym, angle: number): void {
-    this.shapePath(x, y, r, ARITY[symbol], angle);
+  private agentPath(x: number, y: number, r: number, arity: number, angle: number): void {
+    this.shapePath(x, y, r, arity, angle);
   }
 
   private shapePath(x: number, y: number, r: number, arity: number, angle: number): void {
@@ -1027,13 +1051,14 @@ export class NetRenderer {
     glow: number,
     alpha: number,
     angle: number,
+    arity: number,
+    style: { a: string; b: string; glow: string },
   ): void {
     if (r <= 0.5 || alpha <= 0.01) return;
     const ctx = this.ctx;
-    const style = SYMBOL_STYLE[symbol];
     // A triangle's mass sits below its circumcentre, so nudge the fill highlight
     // and the glyph down to look centred.
-    const inset = ARITY[symbol] >= 2 ? r * 0.16 : r * 0.04;
+    const inset = arity >= 2 ? r * 0.16 : r * 0.04;
     // The bias follows the rotation, so the glyph stays in the fat part of the
     // shape however the agent is turned.
     const bias = { x: -Math.sin(angle) * 0 + Math.cos(angle + Math.PI / 2) * inset, y: Math.sin(angle + Math.PI / 2) * inset };
@@ -1054,7 +1079,7 @@ export class NetRenderer {
     g.addColorStop(0, style.a);
     g.addColorStop(1, style.b);
     ctx.fillStyle = g;
-    this.agentPath(x, y, r, symbol, angle);
+    this.agentPath(x, y, r, arity, angle);
     ctx.fill();
     ctx.shadowBlur = 0;
     ctx.strokeStyle = "rgba(255,255,255,0.35)";
@@ -1063,7 +1088,7 @@ export class NetRenderer {
 
     // Gloss highlight, clipped to the outline so it can't spill past a corner.
     ctx.save();
-    this.agentPath(x, y, r, symbol, angle);
+    this.agentPath(x, y, r, arity, angle);
     ctx.clip();
     ctx.beginPath();
     ctx.ellipse(x + bias.x - r * 0.22, y + bias.y - r * 0.12, r * 0.36, r * 0.2, -0.5, 0, Math.PI * 2);
@@ -1072,7 +1097,7 @@ export class NetRenderer {
     ctx.restore();
 
     ctx.fillStyle = "rgba(8,12,30,0.85)";
-    ctx.font = `700 ${Math.max(8, r * (ARITY[symbol] >= 2 ? 0.9 : 1.05))}px "Baloo 2", system-ui, sans-serif`;
+    ctx.font = `700 ${Math.max(8, r * (arity >= 2 ? 0.9 : 1.05))}px "Baloo 2", system-ui, sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(symbol, x + bias.x, y + bias.y + r * 0.04);
@@ -1230,4 +1255,4 @@ export class NetRenderer {
 }
 
 /** Re-exported so the sandbox can share the palette with its HTML chrome. */
-export const SANDBOX_THEME = { ...THEME, symbols: SYMBOL_STYLE };
+export const SANDBOX_THEME = { ...THEME };

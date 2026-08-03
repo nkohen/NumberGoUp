@@ -35,19 +35,11 @@
  * This module is pure: no DOM, no rendering, no game concepts.
  */
 
-/** The three interaction combinators. */
-export type Sym = "γ" | "δ" | "ε";
+export type { Sym } from "./alphabet";
+import { arityOf, BASE, type Alphabet, type Sym } from "./alphabet";
 
-export const SYMBOLS: readonly Sym[] = ["γ", "δ", "ε"];
-
-export const ARITY: Readonly<Record<Sym, number>> = { γ: 2, δ: 2, ε: 0 };
-
-/** Human-readable names, for the sandbox UI. */
-export const SYMBOL_NAMES: Readonly<Record<Sym, string>> = {
-  γ: "constructor",
-  δ: "duplicator",
-  ε: "eraser",
-};
+/** The base combinators, for callers that just want the default alphabet. */
+export const SYMBOLS: readonly Sym[] = BASE.symbols.map((s) => s.symbol);
 
 export type AgentId = number;
 
@@ -113,6 +105,17 @@ export function portsOf(agent: Agent): PortRef[] {
 export class NetError extends Error {}
 
 export class Net {
+  /**
+   * The symbols and rules this net is written in. Everything about what the net
+   * MEANS lives here rather than in the model, so an alternative alphabet is a
+   * value you pass in rather than a fork of the reducer.
+   */
+  readonly alphabet: Alphabet;
+
+  constructor(alphabet: Alphabet = BASE) {
+    this.alphabet = alphabet;
+  }
+
   private readonly agentMap = new Map<AgentId, Agent>();
   /** Symmetric: `links[key(a)] === b` iff `links[key(b)] === a`. */
   private readonly links = new Map<string, Endpoint>();
@@ -187,7 +190,11 @@ export class Net {
    * Interactive/authoring code wants {@link addAgentWired} instead.
    */
   addAgent(symbol: Sym): Agent {
-    const agent: Agent = { id: this.nextAgentId++, symbol, arity: ARITY[symbol] };
+    const agent: Agent = {
+      id: this.nextAgentId++,
+      symbol,
+      arity: arityOf(this.alphabet, symbol),
+    };
     this.agentMap.set(agent.id, agent);
     return agent;
   }
@@ -318,7 +325,7 @@ export class Net {
   // --- Copying & identity -----------------------------------------------------
 
   clone(): Net {
-    const copy = new Net();
+    const copy = new Net(this.alphabet);
     for (const a of this.agentMap.values()) copy.agentMap.set(a.id, a);
     for (const [k, v] of this.links) copy.links.set(k, v);
     for (const f of this.freeSet) copy.freeSet.add(f);

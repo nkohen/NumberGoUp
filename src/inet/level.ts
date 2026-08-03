@@ -26,6 +26,7 @@
  *
  * Pure and DOM-free.
  */
+import { symbolDef, type Alphabet } from "./alphabet";
 import { isFree, Net, principal, type Sym } from "./net";
 import { activePairs, reduce, step, type ActivePair } from "./reduce";
 
@@ -41,13 +42,13 @@ export function cardLabel(card: Card): string {
   return card.kind === "wire" ? "⌇" : card.symbol;
 }
 
-export function cardName(card: Card): string {
+/** Tooltip for a card, taken from the alphabet so new symbol sets describe
+ *  themselves rather than needing the UI updated. */
+export function cardName(card: Card, alphabet: Alphabet): string {
   if (card.kind === "wire") return "wire — splice two loose ends together";
-  return card.symbol === "γ"
-    ? "γ constructor — annihilates another γ"
-    : card.symbol === "δ"
-      ? "δ duplicator — annihilates another δ, copies anything else"
-      : "ε eraser — erases whatever it meets";
+  const def = symbolDef(alphabet, card.symbol);
+  if (!def) return card.symbol;
+  return `${def.symbol} ${def.name} (arity ${def.arity})`;
 }
 
 export type Move =

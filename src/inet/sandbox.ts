@@ -17,7 +17,8 @@
  * reports.
  */
 import { Rng, randomSeed } from "../core/rng";
-import { Net, SYMBOL_NAMES, type Endpoint, type Sym } from "./net";
+import { BASE, symbolDef } from "./alphabet";
+import { Net, type Endpoint, type Sym } from "./net";
 import { activePairs, step, type ActivePair } from "./reduce";
 import { NetRenderer } from "./render";
 import { PRESETS } from "./presets";
@@ -296,7 +297,7 @@ function syncButtons(): void {
       ? "click a port, then another port, to wire them · drag to move · corners are ports: apex up = principal"
       : tool === "erase"
         ? "click an agent to delete it"
-        : `click to place ${tool} — ${SYMBOL_NAMES[tool]}`;
+        : `click to place ${tool} — ${symbolDef(BASE, tool)?.name ?? ""}`;
 }
 
 for (const button of symbolButtons) {

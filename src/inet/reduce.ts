@@ -26,6 +26,7 @@
  * asserts this over the presets and hundreds of random nets; it is the strongest
  * correctness signal available for this module.
  */
+import { lookupRule, type Slot } from "./alphabet";
 import { Rng } from "../core/rng";
 import {
   aux,
@@ -42,11 +43,20 @@ import {
 
 export type ActivePair = [AgentId, AgentId];
 
-/** Which rewrite an active pair will perform. */
-export type RuleKind = "annihilate" | "commute";
+/**
+ * The verb an active pair will perform, or null when the alphabet has no rule
+ * for the pair — in which case the redex is DEADLOCKED: permanently stuck, but
+ * not an error. An alphabet can use that deliberately, as armour.
+ */
+export function verbFor(net: Net, a: Sym, b: Sym): string | null {
+  return lookupRule(net.alphabet, a, b)?.rule.verb ?? null;
+}
 
-export function ruleFor(a: Sym, b: Sym): RuleKind {
-  return a === b ? "annihilate" : "commute";
+/** Does the alphabet know how to reduce this pair? */
+export function hasRule(net: Net, pair: ActivePair): boolean {
+  const a = net.agent(pair[0]);
+  const b = net.agent(pair[1]);
+  return !!a && !!b && lookupRule(net.alphabet, a.symbol, b.symbol) !== null;
 }
 
 /**
@@ -116,23 +126,29 @@ export function step(net: Net, pair: ActivePair): AgentId[] {
   const direct: Array<[Endpoint, Endpoint]> = [];
   const touched: AgentId[] = [];
 
-  if (a.symbol === b.symbol) {
-    // Annihilate: wire the aux ports through pairwise.
-    for (let j = 0; j < a.arity; j++) pending.push([aux(idA, j), aux(idB, j)]);
-  } else {
-    // Commute: each agent duplicates the other.
-    const copiesOfA: AgentId[] = [];
-    const copiesOfB: AgentId[] = [];
-    for (let k = 0; k < b.arity; k++) copiesOfA.push(net.addAgent(a.symbol).id);
-    for (let j = 0; j < a.arity; j++) copiesOfB.push(net.addAgent(b.symbol).id);
-    touched.push(...copiesOfA, ...copiesOfB);
-    for (let k = 0; k < b.arity; k++) pending.push([aux(idB, k), principal(copiesOfA[k])]);
-    for (let j = 0; j < a.arity; j++) pending.push([aux(idA, j), principal(copiesOfB[j])]);
-    for (let k = 0; k < b.arity; k++) {
-      for (let j = 0; j < a.arity; j++) {
-        direct.push([aux(copiesOfA[k], j), aux(copiesOfB[j], k)]);
-      }
-    }
+  const oriented = lookupRule(net.alphabet, a.symbol, b.symbol);
+  if (!oriented) throw new NetError(`step: no rule for ${a.symbol} ⋈ ${b.symbol} (deadlocked)`);
+  const { rule, swap } = oriented;
+  // The rule is written once per unordered pair, so half the time this agent
+  // pair arrives in the other order.
+  const sideA = swap ? idB : idA;
+  const sideB = swap ? idA : idB;
+
+  const created = rule.creates.map((symbol) => net.addAgent(symbol).id);
+  touched.push(...created);
+
+  const endpointOf = (slot: Slot): Endpoint =>
+    slot.kind === "interface"
+      ? aux(slot.side === "a" ? sideA : sideB, slot.index)
+      : { agent: created[slot.agent], port: slot.port };
+
+  for (const [x, y] of rule.links) {
+    const ex = endpointOf(x);
+    const ey = endpointOf(y);
+    // A link touching a vanishing aux port has to be traced outward; a link
+    // between two created agents can be made directly.
+    if (x.kind === "interface" || y.kind === "interface") pending.push([ex, ey]);
+    else direct.push([ex, ey]);
   }
 
   /** The rule's substitution for each vanishing port. */
@@ -259,6 +275,11 @@ export interface ReduceResult {
   /** Closed agent-free wire loops accumulated. */
   loops: number;
   fuelExhausted: boolean;
+  /**
+   * Active pairs the alphabet has no rule for. They are permanently stuck, so
+   * reduction stops with them in place rather than looping or throwing.
+   */
+  deadlocked: number;
 }
 
 export const DEFAULT_FUEL = 10_000;
@@ -279,14 +300,20 @@ export function reduce(net: Net, options: ReduceOptions = {}): ReduceResult {
   let fuelExhausted = false;
 
   const redexes = new RedexSet();
-  for (const pair of activePairs(net)) redexes.add(pair);
+  let deadlocked = 0;
+  for (const pair of activePairs(net)) {
+    if (hasRule(net, pair)) redexes.add(pair);
+    else deadlocked++;
+  }
 
   /** Fire one redex and fold whatever it changed back into the worklist. */
   const fire = (pair: ActivePair): void => {
     redexes.remove(pair);
     for (const id of step(net, pair)) {
       const next = pairOf(net, id);
-      if (next) redexes.add(next);
+      if (!next) continue;
+      if (hasRule(net, next)) redexes.add(next);
+      else deadlocked++;
     }
     interactions++;
     peakAgents = Math.max(peakAgents, net.agentCount);
@@ -325,5 +352,6 @@ export function reduce(net: Net, options: ReduceOptions = {}): ReduceResult {
     finalAgents: net.agentCount,
     loops: net.loops,
     fuelExhausted,
+    deadlocked,
   };
 }

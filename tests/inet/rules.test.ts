@@ -8,7 +8,7 @@ import {
   type AgentId,
   type Sym,
 } from "../../src/inet/net";
-import { activePairs, ruleFor, step } from "../../src/inet/reduce";
+import { activePairs, step, verbFor } from "../../src/inet/reduce";
 
 /** Two agents wired principal-to-principal; every aux port sits on a free port. */
 function redex(a: Sym, b: Sym): { net: Net; a: AgentId; b: AgentId } {
@@ -253,11 +253,14 @@ describe("uniform rule vs the classical six", () => {
   }
 
   it("classifies every pair the way the six rules do", () => {
-    expect(ruleFor("γ", "γ")).toBe("annihilate");
-    expect(ruleFor("δ", "δ")).toBe("annihilate");
-    expect(ruleFor("ε", "ε")).toBe("annihilate");
-    expect(ruleFor("γ", "δ")).toBe("commute");
-    expect(ruleFor("γ", "ε")).toBe("commute"); // erasure is commutation at arity 0
-    expect(ruleFor("δ", "ε")).toBe("commute");
+    const net = new Net();
+    expect(verbFor(net, "γ", "γ")).toBe("annihilate");
+    expect(verbFor(net, "δ", "δ")).toBe("annihilate");
+    expect(verbFor(net, "ε", "ε")).toBe("annihilate");
+    expect(verbFor(net, "γ", "δ")).toBe("commute");
+    // Erasure is commutation at arity 0; the base alphabet labels it separately
+    // only so the analysis harness can tell the two apart.
+    expect(verbFor(net, "γ", "ε")).toBe("erase");
+    expect(verbFor(net, "δ", "ε")).toBe("erase");
   });
 });

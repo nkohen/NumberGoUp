@@ -201,7 +201,7 @@ function syncHand(): void {
     el.className = `card sym-${card.kind === "wire" ? "wire" : card.symbol}`;
     if (held === index) el.classList.add("on");
     el.textContent = cardLabel(card);
-    el.title = cardName(card);
+    el.title = cardName(card, run.net.alphabet);
     el.addEventListener("click", () => {
       held = held === index ? null : index;
       spliceFrom = null;

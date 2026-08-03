@@ -8,7 +8,8 @@
  * about as often as chance allows, the resulting nets have plenty of redexes.
  */
 import { Rng } from "../core/rng";
-import { Net, portsOf, SYMBOLS, type PortRef, type Sym } from "./net";
+import { BASE, type Alphabet } from "./alphabet";
+import { Net, portsOf, type PortRef, type Sym } from "./net";
 import { reduce, type ReduceOptions, type ReduceResult } from "./reduce";
 
 export type SymbolWeights = Partial<Record<Sym, number>>;
@@ -22,8 +23,10 @@ export interface RandomNetOptions {
   wireFraction?: number;
 }
 
-function pickSymbol(rng: Rng, weights: SymbolWeights): Sym {
-  const entries = SYMBOLS.map((s) => [s, weights[s] ?? 0] as const).filter(([, w]) => w > 0);
+function pickSymbol(rng: Rng, weights: SymbolWeights, alphabet: Alphabet): Sym {
+  const entries = alphabet.symbols
+    .map((s) => [s.symbol, weights[s.symbol] ?? 1] as const)
+    .filter(([, w]) => w > 0);
   const total = entries.reduce((sum, [, w]) => sum + w, 0);
   let roll = rng.next() * total;
   for (const [sym, w] of entries) {
@@ -39,11 +42,12 @@ export function randomNet(
   agentCount: number,
   weights: SymbolWeights = DEFAULT_WEIGHTS,
   options: RandomNetOptions = {},
+  alphabet: Alphabet = BASE,
 ): Net {
-  const net = new Net();
+  const net = new Net(alphabet);
   const ports: PortRef[] = [];
   for (let i = 0; i < agentCount; i++) {
-    const agent = net.addAgentWired(pickSymbol(rng, weights));
+    const agent = net.addAgentWired(pickSymbol(rng, weights, alphabet));
     ports.push(...portsOf(agent));
   }
 
