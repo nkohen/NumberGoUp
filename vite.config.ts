@@ -121,14 +121,15 @@ export default defineConfig({
   build: {
     target: "es2020",
     outDir: "dist",
-    // `sandbox.html` is the dev-only interaction-combinator toy (src/inet/). It is
+    // `sandbox.html` (the interaction-combinator toy) and `play.html` (the
+    // "clear the net" demo built on it) are dev-only, in src/inet/. They are
     // deliberately NOT part of the shipped game: `vite dev` already serves any
     // HTML file in the project root, so it is reachable at /sandbox.html with no
     // configuration, and leaving it out of the build keeps it off the PWA
     // precache. Set INET_SANDBOX=1 to emit it as a second input when you want a
     // static copy to host.
     rollupOptions: process.env.INET_SANDBOX
-      ? { input: { main: "index.html", sandbox: "sandbox.html" } }
+      ? { input: { main: "index.html", sandbox: "sandbox.html", play: "play.html" } }
       : {},
   },
   test: {

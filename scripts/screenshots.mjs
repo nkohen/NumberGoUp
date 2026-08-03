@@ -232,6 +232,35 @@ async function captureSandbox(browser) {
   }
 }
 
+/**
+ * The "clear the net" demo (dev-only, /play.html) — the game layer built on the
+ * sandbox. Driven through `window.__play`.
+ */
+const PLAY_SHOTS = [
+  { name: "play-mirror", level: "mirror", hold: 0 },
+  { name: "play-stack", level: "stack", hold: 0 },
+  { name: "play-knot", level: "knot", hold: 4 },
+];
+
+async function capturePlay(browser) {
+  for (const vp of VIEWPORTS) {
+    for (const shot of PLAY_SHOTS) {
+      const context = await browser.newContext(vp.context);
+      const page = await context.newPage();
+      await page.goto(`${BASE}/play.html?level=${shot.level}`, { waitUntil: "networkidle" });
+      await sleep(700);
+      // Hold a card so the playable/live wire highlighting is visible.
+      const cards = page.locator(".card");
+      if ((await cards.count()) > shot.hold) await cards.nth(shot.hold).click();
+      await sleep(600);
+      const file = path.join(OUT, `${vp.name}-${shot.name}.png`);
+      await page.screenshot({ path: file });
+      console.log("✔", path.relative(ROOT, file));
+      await context.close();
+    }
+  }
+}
+
 async function waitForServer(timeoutMs = 20000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -272,7 +301,8 @@ try {
     }
   }
   await captureSandbox(browser);
-  const total = VIEWPORTS.length * (SCREENS.length + SANDBOX_SHOTS.length);
+  await capturePlay(browser);
+  const total = VIEWPORTS.length * (SCREENS.length + SANDBOX_SHOTS.length + PLAY_SHOTS.length);
   console.log(`\nDone — ${total} screenshots in ./screenshots/`);
 } catch (err) {
   console.error("✗", err.message);

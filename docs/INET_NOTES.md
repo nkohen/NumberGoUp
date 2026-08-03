@@ -263,6 +263,63 @@ form to hit rather than a raw score).
 
 ---
 
+## The "clear the net" demo
+
+`/play.html` (dev only, `npm run dev`) is a playable slice of the game concept:
+**a level is an enemy net with free wires, and you win by reducing it to zero
+agents.** Two card types — an agent card (γ/δ/ε) plugs into a free wire
+principal-port-first, and a wire card splices two loose ends together.
+
+I probed the concept against the real reducer before building any of it
+(`tools/inet-clear.ts`), because it lives or dies on one question:
+
+**Is ε-spam dominant?** No — and that is the whole reason this works. Plugging ε
+into every free wire clears only **44–60%** of random enemies, and when it fails
+it strands about three agents. The reason is structural: erasing a γ spawns *two*
+erasers on its aux wires, so if those lead to free ports the erasers just sit
+there. **Erasure does not clean up after itself.** Reaching zero means making two
+erasure waves meet head-on, which is what wire cards are for.
+
+Three consequences fall straight out of the rewrite rules, and between them they
+are the game:
+
+| | |
+|---|---|
+| **Match the symbol** | γ meets γ → annihilate. Cheap, surgical, no fallout. On the smallest possible level (one γ) this clears in **1 card** where ε-spam takes 3. |
+| **Only principal ports are live** | A card plugged into a wire that leads to an *aux* port builds structure and starts nothing. The enemy's interface is its attack surface — and that is a real level-design knob. |
+| **The interface is a resource** | γ and δ each bring two new free wires; ε brings none. You open and close the interface as you go. |
+
+δ earns its place too, which surprised me — duplication makes strictly *more*
+work, so I expected it to be a trap card. It shows up throughout optimal lines
+anyway, because commuting **restructures** a net so things line up to annihilate
+later. "Makes it worse before it gets better" is a good card to have.
+
+### You cannot tell by looking whether a net is clearable
+
+This is the real engineering constraint. A δ in the wrong place duplicates
+whatever you throw at it and the level is simply unwinnable; other nets need one
+specific three-card line. So `solver.ts` does an iterative-deepening search with
+the hand as the branching constraint, and **every shipped level is verified by
+it** — `tests/inet/solver.test.ts` re-derives every par and fails if a level
+drifts off it or stops being solvable. Authoring these by eye does not work: of
+the eight levels I hand-wrote, the solver caught two that were mis-stated and one
+whose declared lesson was not what its cheapest line actually did.
+
+Two things follow that matter for any larger version:
+
+- **Search is exponential**, so levels are bounded to roughly ≤6 agents and ≤4
+  cards. Comfortably enough for hand-authored puzzles, and it happens to coincide
+  with the sizes that are legible anyway — but it means a generator could not
+  scale levels arbitrarily without a smarter solver.
+- **`par` is an upper bound, not a proven floor.** The solver searches the policy
+  "reduce to normal form between moves"; a player can also stop reduction
+  part-way and play into a half-reduced net. Reduction never creates or destroys
+  free wires, so the same wires are always available, but what sits at the far
+  end of one can change as an erasure wave travels along it. The demo reports
+  beating par as *under par* rather than treating it as impossible.
+
+---
+
 ## Notes on the code
 
 - `src/inet/{net,reduce,layout,generate,presets}.ts` are pure and DOM-free.

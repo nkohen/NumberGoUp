@@ -184,6 +184,19 @@ export class NetRenderer {
 
   /** Endpoint the user has armed for wiring, drawn highlighted. */
   selected: Endpoint | null = null;
+  /**
+   * Free-port ids to draw as legal drop targets. The game layer sets this while
+   * a card is held, so the interface the player can actually attack is obvious
+   * rather than something they have to deduce from the shapes.
+   */
+  highlightFree = new Set<number>();
+  /**
+   * Of those, the ones that would actually START A REACTION — i.e. whose far end
+   * is a principal port. Drawn hotter than the merely-legal ones, because
+   * "which wires are live" is the single thing a player most needs to see and
+   * the hardest to work out from the picture.
+   */
+  highlightHot = new Set<number>();
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext("2d");
@@ -458,6 +471,8 @@ export class NetRenderer {
     this.particles = [];
     this.anims = [];
     this.selected = null;
+    this.highlightFree.clear();
+    this.highlightHot.clear();
   }
 
   // --- Positions ------------------------------------------------------------------
@@ -497,6 +512,24 @@ export class NetRenderer {
       if (d <= bestD) {
         bestD = d;
         best = id;
+      }
+    }
+    return best;
+  }
+
+  /** The FREE port under the pointer — the only thing a card can be played on. */
+  freePortAt(net: Net, screenX: number, screenY: number, slop = 20): number | null {
+    const { x, y } = this.toWorld(screenX, screenY);
+    const reach = slop / this.camera.scale;
+    let best: number | null = null;
+    let bestD = reach * reach;
+    for (const f of net.freePorts()) {
+      const p = this.freeViews.get(f);
+      if (!p) continue;
+      const d = (p.x - x) ** 2 + (p.y - y) ** 2;
+      if (d <= bestD) {
+        bestD = d;
+        best = f;
       }
     }
     return best;
@@ -858,12 +891,27 @@ export class NetRenderer {
     for (const f of net.freePorts()) {
       const p = this.freeViews.get(f);
       if (!p) continue;
-      this.shapePath(p.x, p.y, r, 0, p.angle);
-      ctx.fillStyle = THEME.freeFill;
+      const target = this.highlightFree.has(f);
+      const hot = target && this.highlightHot.has(f);
+      ctx.save();
+      if (target) {
+        // A pulse, so a playable wire reads as playable at a glance.
+        const pulse = 0.55 + 0.45 * Math.sin(this.time * 5);
+        ctx.shadowColor = hot ? THEME.wireActive : THEME.select;
+        ctx.shadowBlur = (hot ? 24 : 14) * pulse;
+      }
+      this.shapePath(p.x, p.y, target ? r * (hot ? 1.5 : 1.3) : r, 0, p.angle);
+      ctx.fillStyle = hot
+        ? "rgba(124,242,155,0.35)"
+        : target
+          ? "rgba(255,226,122,0.22)"
+          : THEME.freeFill;
       ctx.fill();
-      ctx.strokeStyle = THEME.free;
-      ctx.lineWidth = this.stroke(1.6);
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = hot ? THEME.wireActive : target ? THEME.select : THEME.free;
+      ctx.lineWidth = this.stroke(target ? 2.2 : 1.6);
       ctx.stroke();
+      ctx.restore();
     }
   }
 
