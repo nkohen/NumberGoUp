@@ -240,6 +240,8 @@ const PLAY_SHOTS = [
   { name: "play-mirror", level: "mirror", hold: 0 },
   { name: "play-stack", level: "stack", hold: 0 },
   { name: "play-knot", level: "knot", hold: 4 },
+  // Hover a live wire so the rule/outcome preview is in the capture.
+  { name: "play-preview", level: "stack", hold: 0, hover: true },
 ];
 
 async function capturePlay(browser) {
@@ -253,6 +255,26 @@ async function capturePlay(browser) {
       const cards = page.locator(".card");
       if ((await cards.count()) > shot.hold) await cards.nth(shot.hold).click();
       await sleep(600);
+      if (shot.hover) {
+        // Move the pointer onto the first wire that would actually react.
+        const at = await page.evaluate(() => {
+          const { run, renderer } = window.__play;
+          const live = run.net
+            .freePorts()
+            .find((f) => {
+              const q = run.net.follow({ free: f });
+              return q && !("free" in q) && q.port === 0;
+            });
+          if (live === undefined) return null;
+          const w = renderer.pointFor({ free: live });
+          const s = renderer.toScreen(w.x, w.y);
+          return { x: s.x, y: s.y + document.querySelector("canvas").getBoundingClientRect().top };
+        });
+        if (at) {
+          await page.mouse.move(at.x, at.y);
+          await sleep(400);
+        }
+      }
       const file = path.join(OUT, `${vp.name}-${shot.name}.png`);
       await page.screenshot({ path: file });
       console.log("✔", path.relative(ROOT, file));

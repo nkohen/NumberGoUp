@@ -15,6 +15,7 @@ import { cardLabel, cardName, LevelRun, legalMoves, type Card, type LevelDef, ty
 import { LEVELS } from "./levels";
 import { isFree, type AgentId } from "./net";
 import { activePairs, type ActivePair } from "./reduce";
+import { previewMove, type Preview } from "./preview";
 import { NetRenderer } from "./render";
 
 const canvas = document.getElementById("net") as HTMLCanvasElement;
@@ -25,6 +26,7 @@ const levelSelect = document.getElementById("level") as HTMLSelectElement;
 const alphabetSelect = document.getElementById("alphabet") as HTMLSelectElement;
 const rulePanel = document.getElementById("rulePanel") as HTMLDivElement;
 const ruleBody = document.getElementById("ruleBody") as HTMLDivElement;
+const tip = document.getElementById("tip") as HTMLDivElement;
 const stepButton = document.getElementById("step") as HTMLButtonElement;
 const runButton = document.getElementById("run") as HTMLButtonElement;
 const undoButton = document.getElementById("undo") as HTMLButtonElement;
@@ -204,6 +206,7 @@ function playMove(move: Move): void {
   renderer.placeLooseFreePorts(run.net);
   held = null;
   spliceFrom = null;
+  tip.classList.remove("show");
   syncHand();
   checkResolution();
 }
@@ -284,6 +287,7 @@ function syncHand(): void {
     el.addEventListener("click", () => {
       held = held === index ? null : index;
       spliceFrom = null;
+      tip.classList.remove("show");
       syncHand();
     });
     handEl.append(el);
@@ -311,7 +315,75 @@ function syncHand(): void {
   renderer.highlightHot = liveTargets();
 }
 
+// --- Hover preview -------------------------------------------------------------------------
+
+/** The move the pointer is currently offering, if any. */
+function hoveredMove(free: number): Move | null {
+  if (held === null) return null;
+  const card = run.hand[held];
+  if (card.kind === "agent") return { kind: "plug", free, symbol: card.symbol };
+  if (spliceFrom === null || spliceFrom === free) return null;
+  return { kind: "splice", a: spliceFrom, b: free };
+}
+
+function renderTip(preview: Preview): string {
+  const { rule, outcome } = preview;
+  const klass = rule.kind === "deadlock" ? "bad" : rule.kind === "reaction" ? "verb" : "warn";
+  const head =
+    rule.kind === "reaction"
+      ? `<span class="head">${rule.pair}</span> <span class="${klass}">${rule.verb}</span> ${rule.result}`
+      : `<span class="head ${klass}">${rule.kind === "deadlock" ? "deadlock" : "no reaction"}</span>`;
+  const delta = outcome.agentsAfter - outcome.agentsBefore;
+  const arrow = delta === 0 ? "no change" : `${outcome.agentsBefore} → ${outcome.agentsAfter} agents`;
+  const outcomeLine = outcome.cleared
+    ? `<span class="win">clears the net</span>`
+    : outcome.diverged
+      ? `<span class="bad">never settles</span>`
+      : `${arrow} · ${outcome.interactions} interaction${outcome.interactions === 1 ? "" : "s"}`;
+  return `${head}<div class="detail">${rule.detail}</div><div class="outcome">${outcomeLine}</div>`;
+}
+
+/** Recomputed only when the hovered target changes — each preview reduces a clone. */
+let tipKey = "";
+
+function showTip(free: number | null, x: number, y: number): void {
+  const move = free === null ? null : hoveredMove(free);
+  if (!move) {
+    tip.classList.remove("show");
+    tipKey = "";
+    return;
+  }
+  const key = JSON.stringify(move) + run.net.signature();
+  if (key !== tipKey) {
+    tipKey = key;
+    tip.innerHTML = renderTip(previewMove(run.net, move));
+  }
+  tip.classList.add("show");
+  // Keep it on screen: flip to the other side of the cursor near the edges.
+  const box = tip.getBoundingClientRect();
+  const main = canvas.getBoundingClientRect();
+  const left = x + 16 + box.width > main.width ? x - box.width - 16 : x + 16;
+  const top = y + 14 + box.height > main.height ? y - box.height - 14 : y + 14;
+  tip.style.left = `${Math.max(4, left)}px`;
+  tip.style.top = `${Math.max(4, top)}px`;
+}
+
 // --- Input -------------------------------------------------------------------------------
+
+canvas.addEventListener("pointermove", (event) => {
+  if (resolved || held === null) {
+    tip.classList.remove("show");
+    return;
+  }
+  const rect = canvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  showTip(renderer.freePortAt(run.net, x, y), x, y);
+});
+
+for (const type of ["pointerleave", "pointercancel"]) {
+  canvas.addEventListener(type, () => tip.classList.remove("show"));
+}
 
 canvas.addEventListener("pointerdown", (event) => {
   if (resolved) return;

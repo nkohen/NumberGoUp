@@ -93,6 +93,11 @@ What to check:
   they carry — a child's apex points up at its parent, and the two halves of an
   active pair face each other. If agents all sit bolt upright, `restAngle` is not
   being applied.
+- **one-port shapes (arity-1 agents and free ports):** the teardrop's POINT must
+  sit on the principal port however the agent has rotated. It used to be picked
+  by sorting vertices by angle, and `atan2` wraps, so past a certain rotation the
+  point flipped to the auxiliary port — `outlineDirections` now special-cases
+  fewer than three ports, and `relax.test.ts` checks 32 rotations.
 - **free ports:** small HOLLOW versions of the single-port shape, each turned to
   face along its own wire. They must stay obviously unfilled — that is the only
   thing distinguishing the net's interface from its agents.
@@ -111,6 +116,10 @@ What to check:
 - **sandbox-wide-parallel:** eight redexes side by side must stay on one compact
   band, not stretch a two-level net down the whole canvas. That is what the row
   height cap in `relayout()` guards.
+- **play-preview:** holding a card and hovering a live wire shows a tooltip with
+  the rule that would fire (pair, verb, what it produces) and the outcome
+  (agent count before/after, interactions, or "clears the net"). It must flip to
+  the other side of the cursor rather than run off the canvas edge.
 - **zoom:** the HUD's `view` row reads `1:1` for anything that fits. A net that
   outgrows the canvas should zoom OUT to fit (never in past 1:1) and stay
   centred, with wires still visible rather than fading to hairlines — that is

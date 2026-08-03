@@ -5,6 +5,7 @@ import { randomNet } from "../../src/inet/generate";
 import {
   attachPoint,
   endpointPoint,
+  outlineDirections,
   energy,
   portBaseAngle,
   portDirection,
@@ -58,6 +59,41 @@ describe("port geometry", () => {
   it("attaches wires at the corner, one radius out", () => {
     const p = attachPoint({ x: 100, y: 100, angle: 0 }, 2, 0, R);
     expect(p).toEqual({ x: expect.closeTo(100, 6), y: 80 });
+  });
+
+  it("points a one-port shape at its PRINCIPAL port, however it is rotated", () => {
+    // Regression: the outline used to sort vertices by angle, and atan2 wraps to
+    // (-pi, pi], so past a certain rotation the auxiliary port sorted first and
+    // an arity-1 agent drew its point backwards.
+    for (let step = 0; step < 32; step++) {
+      const angle = (step / 32) * Math.PI * 2 - Math.PI;
+      for (const arity of [0, 1]) {
+        const dirs = outlineDirections(arity, angle);
+        expect(dirs).toHaveLength(1);
+        const principal = portDirection(arity, 0, angle);
+        expect(dirs[0].x).toBeCloseTo(principal.x, 9);
+        expect(dirs[0].y).toBeCloseTo(principal.y, 9);
+      }
+    }
+  });
+
+  it("orders a three-port outline into a simple polygon at any rotation", () => {
+    for (let step = 0; step < 16; step++) {
+      const angle = (step / 16) * Math.PI * 2 - Math.PI;
+      const dirs = outlineDirections(2, angle);
+      expect(dirs).toHaveLength(3);
+      // Every port must appear exactly once, whatever the ordering.
+      for (let port = 0; port <= 2; port++) {
+        const want = portDirection(2, port, angle);
+        const hits = dirs.filter(
+          (d) => Math.abs(d.x - want.x) < 1e-9 && Math.abs(d.y - want.y) < 1e-9,
+        );
+        expect(hits).toHaveLength(1);
+      }
+      // Angles are non-decreasing, which is what makes the outline non-self-intersecting.
+      const angles = dirs.map((d) => Math.atan2(d.y, d.x));
+      for (let i = 1; i < angles.length; i++) expect(angles[i]).toBeGreaterThanOrEqual(angles[i - 1]);
+    }
   });
 
   it("turnToward takes the short way round the circle", () => {

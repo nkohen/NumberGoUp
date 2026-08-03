@@ -87,6 +87,24 @@ export function portDirection(arity: number, port: number, angle = 0): Point {
   return { x: Math.cos(a), y: Math.sin(a) };
 }
 
+/**
+ * The directions an agent's outline runs through, in drawing order.
+ *
+ * For three or more ports the vertices are sorted by angle so the outline is a
+ * simple polygon. For FEWER than three there is no polygon — the shape is a
+ * teardrop — and the point must be the PRINCIPAL port specifically. Sorting
+ * cannot be trusted to put it first: `atan2` wraps to (-π, π], so once an agent
+ * has rotated past a certain angle the auxiliary port sorts first and the
+ * teardrop ends up pointing at the wrong port. That was a real bug; arity-1
+ * agents drew their point backwards depending on which way they had turned.
+ */
+export function outlineDirections(arity: number, angle: number): Point[] {
+  const dirs: Point[] = [];
+  for (let port = 0; port <= arity; port++) dirs.push(portDirection(arity, port, angle));
+  if (dirs.length < 3) return [portDirection(arity, 0, angle)];
+  return dirs.sort((a, b) => Math.atan2(a.y, a.x) - Math.atan2(b.y, b.x));
+}
+
 /** Where a wire attaches to a port: the corresponding corner of the shape. */
 export function attachPoint(
   place: Point & { angle: number },

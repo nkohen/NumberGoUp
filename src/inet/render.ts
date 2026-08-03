@@ -37,6 +37,7 @@ import {
   attachPoint,
   portDirection,
   relaxStep,
+  outlineDirections,
   restAngle,
   restAngleFree,
   turnToward,
@@ -982,10 +983,7 @@ export class NetRenderer {
 
   private shapePath(x: number, y: number, r: number, arity: number, angle: number): void {
     const ctx = this.ctx;
-    const dirs: Point[] = [];
-    for (let port = 0; port <= arity; port++) dirs.push(portDirection(arity, port, angle));
-    // Order them around the centre so the outline is a simple polygon.
-    dirs.sort((a, b) => Math.atan2(a.y, a.x) - Math.atan2(b.y, b.x));
+    const dirs = outlineDirections(arity, angle);
 
     if (dirs.length < 3) {
       const apex = Math.atan2(dirs[0].y, dirs[0].x);

@@ -22,6 +22,7 @@ import { ALPHABETS, alphabetById } from "./alphabets";
 import { makeEnemy } from "./generate-levels";
 import { Net, type Endpoint, type Sym } from "./net";
 import { activePairs, step, type ActivePair } from "./reduce";
+import { previewPlug, previewSplice, outcomeOf, type RulePreview } from "./preview";
 import { NetRenderer } from "./render";
 import { PRESETS } from "./presets";
 
@@ -45,6 +46,7 @@ const alphabetSelect = document.getElementById("alphabet") as HTMLSelectElement;
 const paletteEl = document.getElementById("palette") as HTMLSpanElement;
 const rulePanel = document.getElementById("rulePanel") as HTMLDivElement;
 const ruleBody = document.getElementById("ruleBody") as HTMLDivElement;
+const tip = document.getElementById("tip") as HTMLDivElement;
 let symbolButtons: HTMLButtonElement[] = [];
 
 const renderer = new NetRenderer(canvas);
@@ -345,12 +347,63 @@ function sameEnd(a: Endpoint, b: Endpoint): boolean {
   return a.agent === b.agent && a.port === b.port;
 }
 
+/**
+ * Hover preview. In the sandbox the "card" is whichever palette symbol is armed,
+ * or — with the wire tool and one end already picked — the splice you are about
+ * to make. Same idea as the demo's: say which rule would fire before it fires.
+ */
+function previewFor(free: number): RulePreview | null {
+  if (tool === "erase") return null;
+  if (tool === "wire") {
+    const first = renderer.selected;
+    if (!first || !("free" in first) || first.free === free) return null;
+    return previewSplice(net, first.free, free);
+  }
+  return previewPlug(net, free, tool);
+}
+
+function showTip(x: number, y: number): void {
+  const free = renderer.freePortAt(net, x, y);
+  const preview = free === null ? null : previewFor(free);
+  if (!preview || free === null) {
+    tip.classList.remove("show");
+    return;
+  }
+  const klass = preview.kind === "deadlock" ? "bad" : preview.kind === "reaction" ? "verb" : "warn";
+  const head =
+    preview.kind === "reaction"
+      ? `<span class="head">${preview.pair}</span> <span class="${klass}">${preview.verb}</span> ${preview.result}`
+      : `<span class="head ${klass}">${preview.kind === "deadlock" ? "deadlock" : "no reaction"}</span>`;
+  const move =
+    tool === "wire" && renderer.selected && "free" in renderer.selected
+      ? ({ kind: "splice", a: renderer.selected.free, b: free } as const)
+      : ({ kind: "plug", free, symbol: tool } as const);
+  const outcome = outcomeOf(net, move);
+  const line = outcome.diverged
+    ? '<span class="bad">never settles</span>'
+    : `${outcome.agentsBefore} → ${outcome.agentsAfter} agents · ` +
+      `${outcome.interactions} interaction${outcome.interactions === 1 ? "" : "s"}`;
+  tip.innerHTML =
+    `${head}<div class="detail">${preview.detail}</div><div class="outcome">${line}</div>`;
+  tip.classList.add("show");
+  const box = tip.getBoundingClientRect();
+  const main = canvas.getBoundingClientRect();
+  tip.style.left = `${Math.max(4, x + 16 + box.width > main.width ? x - box.width - 16 : x + 16)}px`;
+  tip.style.top = `${Math.max(4, y + 14 + box.height > main.height ? y - box.height - 14 : y + 14)}px`;
+}
+
 canvas.addEventListener("pointermove", (event) => {
-  if (!dragging) return;
   const { x, y } = canvasPoint(event);
+  if (!dragging) {
+    showTip(x, y);
+    return;
+  }
+  tip.classList.remove("show");
   if (dragging.kind === "agent") renderer.moveAgent(dragging.id, x, y);
   else renderer.moveFreePort(dragging.id, x, y);
 });
+
+canvas.addEventListener("pointerleave", () => tip.classList.remove("show"));
 
 for (const type of ["pointerup", "pointercancel"]) {
   canvas.addEventListener(type, () => {

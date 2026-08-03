@@ -233,6 +233,21 @@
         white-space: normal;
         max-width: 260px;
       }
+      /* Hover preview: the equivalent of the arithmetic game showing you the
+         number a placement would produce. */
+      #tip { position: absolute; pointer-events: none; display: none; z-index: 5;
+        padding: 8px 10px; background: var(--panel); border: 1px solid var(--stroke);
+        border-radius: 9px; font-size: 12.5px; line-height: 1.45; max-width: 260px;
+        box-shadow: 0 8px 26px rgba(0,0,0,0.5); }
+      #tip.show { display: block; }
+      #tip .head { font-weight: 700; font-size: 14px; }
+      #tip .verb { color: var(--accent); }
+      #tip .warn { color: #ffd166; }
+      #tip .bad { color: #ff6b8a; }
+      #tip .detail { color: var(--dim); margin-top: 3px; }
+      #tip .outcome { margin-top: 5px; border-top: 1px solid var(--stroke); padding-top: 5px;
+        font-variant-numeric: tabular-nums; }
+      #tip .win { color: var(--accent); font-weight: 700; }
       #desc {
         position: absolute;
         top: 10px;
@@ -298,6 +313,7 @@
       </header>
       <main>
         <canvas id="net"></canvas>
+        <div id="tip"></div>
         <div id="rulePanel"><div id="ruleBody"></div></div>
         <div id="hud"></div>
         <div id="desc"></div>
