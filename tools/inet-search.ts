@@ -49,8 +49,13 @@ import { activePairs, hasRule, reduce, step } from "../src/inet/reduce";
 import { randomNet } from "../src/inet/generate";
 import { solve } from "../src/inet/solver";
 
-const CANDIDATES = 90;
-const LEVELS = 26;
+const CANDIDATES = 70;
+const LEVELS = 22;
+/** Wall-clock ceiling per candidate. Some random rule tables make every net
+ *  explode, and scoring one of those can take minutes; they are exactly the
+ *  alphabets we do not want anyway, so time them out rather than wait. */
+const CANDIDATE_MS = 6000;
+const TOTAL_MS = 300_000;
 const ENEMY_SIZE = 3;
 const MAX_CARDS = 4;
 
@@ -215,7 +220,28 @@ function greedy(start: Net, hand: readonly Card[]): number | null {
   return isCleared(net) ? MAX_CARDS : null;
 }
 
-const rejects = { invalid: 0, fewLevels: 0, unclearable: 0, kept: 0 };
+const rejects = { invalid: 0, explosive: 0, fewLevels: 0, unclearable: 0, slow: 0, kept: 0 };
+
+/**
+ * Cheap screen before the expensive solving: reduce a handful of random nets and
+ * reject the alphabet if they mostly diverge or blow up. A rule table where
+ * everything explodes cannot make a puzzle, and finding that out by solving is
+ * hundreds of times more expensive than finding it out by reducing.
+ */
+function explodes(alphabet: Alphabet): boolean {
+  let bad = 0;
+  for (let seed = 1; seed <= 8; seed++) {
+    const net = randomNet(new Rng(seed * 3301), 6, undefined, {}, alphabet);
+    const before = net.agentCount;
+    const result = reduce(net, { fuel: 250 });
+    if (result.fuelExhausted || net.agentCount > before * 6) bad++;
+  }
+  // Threshold deliberately near-total. The BASE combinators diverge on roughly
+  // a third of random nets — that is normal for this system, not a defect — so a
+  // stricter screen silently drops the control from its own comparison, which is
+  // exactly what an earlier version of this did.
+  return bad >= 7;
+}
 
 interface Score {
   verbsUsed: number;
@@ -226,11 +252,19 @@ interface Score {
   tally: string;
 }
 
-function evaluate(alphabet: Alphabet, levelCount: number): Score | null {
+/** `budgetMs` is generous for the hand-designed baselines (there are only a few
+ *  and they must appear in their own comparison) and tight for the random
+ *  candidates, where a slow one is a bad one. */
+function evaluate(alphabet: Alphabet, levelCount: number, budgetMs = CANDIDATE_MS): Score | null {
   if (validateAlphabet(alphabet).length > 0) {
     rejects.invalid++;
     return null;
   }
+  if (explodes(alphabet)) {
+    rejects.explosive++;
+    return null;
+  }
+  const deadline = Date.now() + budgetMs;
   const hand = handFor(alphabet);
   const levels: Net[] = [];
   for (let seed = 1; levels.length < levelCount && seed < 30000; seed++) {
@@ -247,7 +281,10 @@ function evaluate(alphabet: Alphabet, levelCount: number): Score | null {
   let verbSum = 0;
   let parSum = 0;
   const tally = new Map<string, number>();
+  let scored = 0;
   for (const level of levels) {
+    if (Date.now() > deadline) break;
+    scored++;
     const result = solve(level.clone(), hand, { maxCards: MAX_CARDS, fuel: 300 });
     if (!result.solution) continue;
     solvable++;
@@ -263,13 +300,17 @@ function evaluate(alphabet: Alphabet, levelCount: number): Score | null {
     for (const v of verbs) tally.set(v, (tally.get(v) ?? 0) + 1);
     if (greedy(level, hand) === result.solution.cards) greedyTies++;
   }
+  if (scored < levels.length / 2) {
+    rejects.slow++;
+    return null;
+  }
   if (solvable === 0) {
     rejects.unclearable++;
     return null;
   }
   rejects.kept++;
 
-  const solvableFrac = solvable / levels.length;
+  const solvableFrac = solvable / scored;
   const verbsUsed = verbSum / solvable;
   const greedyFrac = greedyTies / solvable;
   // Reward verb variety and punish a game greedy can play, but only count
@@ -296,13 +337,16 @@ console.log(`${CANDIDATES} candidates x ${LEVELS} levels each\n`);
 
 const baselines: Array<{ label: string; score: Score }> = [];
 for (const alphabet of ALPHABETS) {
-  const score = evaluate(alphabet, LEVELS);
+  const score = evaluate(alphabet, LEVELS, 120_000);
   if (score) baselines.push({ label: alphabet.id, score });
 }
 
 const rng = new Rng(20260803);
 const found: Array<{ alphabet: Alphabet; score: Score }> = [];
-for (let i = 0; i < CANDIDATES; i++) {
+const started = Date.now();
+let tried = 0;
+for (let i = 0; i < (process.argv.includes("--baselines") ? 0 : CANDIDATES) && Date.now() - started < TOTAL_MS; i++) {
+  tried++;
   const alphabet = randomAlphabet(rng, i);
   const score = evaluate(alphabet, LEVELS);
   if (score) found.push({ alphabet, score });
@@ -324,8 +368,9 @@ console.log("-".repeat(52));
 for (const f of found.slice(0, 6)) console.log(row(f.alphabet.id, f.score));
 
 console.log(
-  `\nof ${CANDIDATES} generated tables: ${rejects.kept} scored, ` +
-    `${rejects.unclearable} could not clear a single level, ` +
+  `\nof ${tried} generated tables tried in ${((Date.now() - started) / 1000).toFixed(0)}s: ` +
+    `${rejects.kept} scored, ${rejects.explosive} made every net explode, ` +
+    `${rejects.unclearable} could not clear a single level, ${rejects.slow} timed out, ` +
     `${rejects.fewLevels} produced too few valid enemies, ${rejects.invalid} were invalid`,
 );
 console.log("\nBest generated table's rules:");

@@ -297,7 +297,74 @@ for (const [x, y] of [
   );
 }
 
-export const ALPHABETS: readonly Alphabet[] = [BASE, FORGE, CASCADE, WARDED];
+// --- Inverted: take away the two answers the base game leans on -------------------
+
+const INVERTED_SYMBOLS: SymbolDef[] = [
+  { symbol: "○", arity: 2, name: "node", color: C.green },
+  { symbol: "□", arity: 2, name: "shell", color: C.cyan },
+  { symbol: "†", arity: 1, name: "spike", color: C.violet },
+  { symbol: "✕", arity: 0, name: "void", color: C.pink },
+];
+
+/**
+ * Distilled from the random rule-table search, which beat every hand-design
+ * here. The generated winner did two things no designer starting from the base
+ * combinators would try, and between them they are the whole idea:
+ *
+ *   1. THE BINARY SYMBOLS CANNOT ANNIHILATE WITH THEMSELVES. ○ ⋈ ○ and □ ⋈ □
+ *      have no rule at all. "Match the symbol" — the base game's one reliable
+ *      move — simply does not exist against the enemy's building blocks.
+ *   2. THE VOID DOES NOT ERASE EVERYTHING. Against a node it TEMPERS: the node
+ *      hardens into a shell and the void survives. So "burn it" is not a
+ *      universal answer either.
+ *
+ * What is left is a route rather than a move. A node must be whittled by a
+ * spike, or sheared against a shell into two spikes which then annihilate each
+ * other; a shell is immune to spikes and has to be burned. Every kill is at
+ * least two steps and the first step is rarely the one that looks productive,
+ * which is why a greedy "remove the most agents now" policy does so badly here.
+ */
+export const INVERTED: Alphabet = build(
+  "inverted",
+  "Inverted",
+  "Binaries cannot match, and fire hardens instead of killing. Every kill is a route.",
+  INVERTED_SYMBOLS,
+  [
+    // Only the odd-arity symbols may annihilate.
+    annihilate("†", "†", 1),
+    annihilate("✕", "✕", 0),
+    // Two binaries shear each other into a pair of spikes.
+    rule("○", "□", "shear", ["†", "†"], [
+      ["a0", "n0"],
+      ["b0", "n0.0"],
+      ["a1", "n1"],
+      ["b1", "n1.0"],
+    ]),
+    // A spike whittles a node down: a fresh spike takes one branch, the other
+    // is capped by a void that keeps burning.
+    rule("†", "○", "whittle", ["†", "✕"], [
+      ["b0", "n0"],
+      ["a0", "n0.0"],
+      ["b1", "n1"],
+    ]),
+    // Fire does not kill a node — it hardens it into a shell.
+    rule("○", "✕", "temper", ["□", "✕"], [
+      ["a0", "n0"],
+      ["a1", "n0.0"],
+      ["n0.1", "n1"],
+    ]),
+    // Shells burn normally, and spikes snuff out.
+    rule("□", "✕", "burn", ["✕", "✕"], [
+      ["a0", "n0"],
+      ["a1", "n1"],
+    ]),
+    rule("†", "✕", "snuff", ["✕"], [["a0", "n0"]]),
+    // ○ ⋈ ○, □ ⋈ □ and □ ⋈ † are deliberately ABSENT.
+  ],
+  { uniformRest: false },
+);
+
+export const ALPHABETS: readonly Alphabet[] = [BASE, FORGE, CASCADE, WARDED, INVERTED];
 
 export function alphabetById(id: string): Alphabet | undefined {
   return ALPHABETS.find((a) => a.id === id);

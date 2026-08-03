@@ -10,7 +10,7 @@ import {
   validateAlphabet,
   type Alphabet,
 } from "../../src/inet/alphabet";
-import { ALPHABETS, FORGE, WARDED } from "../../src/inet/alphabets";
+import { ALPHABETS, FORGE, INVERTED, WARDED } from "../../src/inet/alphabets";
 import { Net, principal } from "../../src/inet/net";
 import { activePairs, hasRule, reduce, step, verbFor } from "../../src/inet/reduce";
 import { randomNet } from "../../src/inet/generate";
@@ -170,6 +170,27 @@ describe("alternative alphabets reduce correctly", () => {
     expect(result.deadlocked).toBe(1);
     expect(result.fuelExhausted).toBe(false);
     net.assertWellFormed("deadlocked");
+  });
+
+  it("Inverted removes the base game's two universal answers", () => {
+    // 1. Binary symbols cannot annihilate with themselves — "match the symbol",
+    //    the one reliable move in the base game, does not exist here.
+    expect(lookupRule(INVERTED, "○", "○")).toBeNull();
+    expect(lookupRule(INVERTED, "□", "□")).toBeNull();
+    // 2. Fire does not kill a node; it hardens it into a shell and survives.
+    const net = redex(INVERTED, "○", "✕");
+    step(net, activePairs(net)[0]);
+    net.assertWellFormed("after temper");
+    expect(net.agents().map((a) => a.symbol).sort()).toEqual(["□", "✕"]);
+  });
+
+  it("Inverted still offers a route: shear into spikes, then annihilate", () => {
+    const net = redex(INVERTED, "○", "□");
+    step(net, activePairs(net)[0]);
+    net.assertWellFormed("after shear");
+    expect(net.agents().map((a) => a.symbol)).toEqual(["†", "†"]);
+    // Those two spikes CAN annihilate, which is how a net gets cleared at all.
+    expect(lookupRule(INVERTED, "†", "†")?.rule.verb).toBe("annihilate");
   });
 
   it("arities are what the alphabet says they are", () => {

@@ -320,6 +320,82 @@ Two things follow that matter for any larger version:
 
 ---
 
+## Searching for a better rule set
+
+The base combinators make a thin game, and measuring it is worse than it looks
+from playing: over solved levels an optimal line triggers **1.08–1.14 distinct
+verbs** on average — annihilate appears in 100% of solutions, commute in 9%,
+erase in 5% — and a greedy "remove the most agents right now" policy matches
+optimal play **86–92%** of the time. One mechanic, almost no decision.
+
+### The cause is arithmetic
+
+**No base rule can turn two agents into one.** A rule must pair up
+`m + n + Σ(arity + 1)` ports, and that has to be even. For two binary agents
+every arity-2 *and* arity-0 agent contributes an odd number, so a legal rule
+creates an even count of them — "these two fuse into a single node" is
+unwritable with binary and nullary symbols. γδε has no odd-arity symbol, so it
+has no middle gear between "remove both" and "multiply". Arity 1 and 3 lift the
+restriction, which is why every candidate alphabet carries one.
+
+`alphabet.ts` therefore makes rules data: a rule is the net that replaces the
+redex, validated so every port is used exactly once and parity closes. Rules are
+keyed by *sorted* symbol pair, which makes "at most one rule per unordered pair"
+structural rather than a discipline — that is the condition that keeps the system
+strongly confluent. A pair with no rule now **deadlocks** instead of throwing.
+
+### Bake-off
+
+`npx vite-node tools/inet-alphabets.ts` (22 levels of 3 agents, same hand shape
+for every alphabet). "verbs" is distinct rewrite verbs an optimal line triggers;
+"greedy" is how often greedy play matches optimal, so **lower is more skill**.
+
+| alphabet | verbs used | greedy = optimal | solvable | par |
+|---|---:|---:|---:|---:|
+| base (γδε) | 1.08 | 92% | 55% | 2.33 |
+| cascade — chain reactions | 1.50 | 81% | 73% | 2.25 |
+| forge — fuse/convert/cut | 1.81 | 75% | 73% | 2.19 |
+| warded — armour via missing rules | 2.63 | 50% | 73% | 2.56 |
+| **inverted** | **2.80** | **20%** | 68% | 2.87 |
+
+### What actually worked, and it was not what I expected
+
+I assumed the fix was the verb the parity analysis unlocked — fusing two agents
+into one. **Forge barely moved the needle.** What worked was taking answers
+*away*:
+
+- **Warded** (2.63 verbs, greedy 50%) has a symbol that can be neither burned nor
+  matched, only opened by a key. One *missing* rule did more than three new ones.
+- **Inverted** (2.80 verbs, greedy 20%) goes further and removes both of the base
+  game's universal answers: the binary symbols **cannot annihilate with
+  themselves**, and fire **tempers** a node into a shell instead of killing it.
+  What is left is a route rather than a move — whittle a node with a spike, or
+  shear it against a shell into two spikes that then annihilate. Every kill is at
+  least two steps, and the first step rarely looks productive, which is exactly
+  why greedy play collapses to 20%.
+
+Inverted was not designed from scratch. `tools/inet-search.ts` generates random
+legal rule tables and scores them the same way; its best find beat every one of
+my hand-designs, and it had done two things I would not have tried — deadlocking
+self-annihilation for the binary symbols, and making the eraser a converter.
+Inverted is that insight written deliberately, and it then beat the random table
+it came from (4.40 vs 3.86 on the composite score).
+
+The generalisable lesson: **the base alphabet is not boring because it has too
+few rules, it is boring because ε answers everything.** Adding verbs to a system
+that still has a universal answer does not help much. Removing the universal
+answer does.
+
+Two caveats worth keeping honest. The search timed out about half its candidates
+(a random rule table can make every net explode, and scoring one of those is
+minutes of work), so it is biased toward cheap-to-evaluate alphabets. And an
+earlier version of the cheap pre-screen silently rejected the *control* — γδε
+diverges on roughly a third of random nets, which is normal for this system, not
+a defect — so the base alphabet was missing from its own comparison until the
+threshold was loosened.
+
+---
+
 ## Notes on the code
 
 - `src/inet/{net,reduce,layout,generate,presets}.ts` are pure and DOM-free.
