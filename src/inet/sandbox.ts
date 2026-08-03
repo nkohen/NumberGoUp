@@ -17,7 +17,9 @@
  * reports.
  */
 import { Rng, randomSeed } from "../core/rng";
-import { BASE, symbolDef } from "./alphabet";
+import { lookupRule, splitPairKey, symbolDef, type Alphabet } from "./alphabet";
+import { ALPHABETS, alphabetById } from "./alphabets";
+import { makeEnemy } from "./generate-levels";
 import { Net, type Endpoint, type Sym } from "./net";
 import { activePairs, step, type ActivePair } from "./reduce";
 import { NetRenderer } from "./render";
@@ -39,12 +41,17 @@ const orderButton = document.getElementById("order") as HTMLButtonElement;
 const eraseButton = document.getElementById("erase") as HTMLButtonElement;
 const settleButton = document.getElementById("settle") as HTMLButtonElement;
 const capSelect = document.getElementById("cap") as HTMLSelectElement;
-const symbolButtons = [...document.querySelectorAll<HTMLButtonElement>("button.sym")];
+const alphabetSelect = document.getElementById("alphabet") as HTMLSelectElement;
+const paletteEl = document.getElementById("palette") as HTMLSpanElement;
+const rulePanel = document.getElementById("rulePanel") as HTMLDivElement;
+const ruleBody = document.getElementById("ruleBody") as HTMLDivElement;
+let symbolButtons: HTMLButtonElement[] = [];
 
 const renderer = new NetRenderer(canvas);
 const rng = new Rng(randomSeed());
 
-let net = new Net();
+let alphabet: Alphabet = ALPHABETS[0];
+let net = new Net(alphabet);
 let tool: Tool = "wire";
 let parallel = false;
 let running = false;
@@ -105,6 +112,83 @@ for (const preset of PRESETS) {
   option.value = preset.id;
   option.textContent = preset.name;
   presetSelect.append(option);
+}
+
+for (const a of ALPHABETS) {
+  const option = document.createElement("option");
+  option.value = a.id;
+  option.textContent = a.name;
+  alphabetSelect.append(option);
+}
+
+/**
+ * Rebuild the palette and rule reference for the current alphabet. The presets
+ * are hand-built γδε nets, so they are only offered for the base alphabet;
+ * everything else gets a Random net instead.
+ */
+function syncAlphabet(): void {
+  paletteEl.innerHTML = "";
+  for (const def of alphabet.symbols) {
+    const button = document.createElement("button");
+    button.className = "sym";
+    button.dataset.sym = def.symbol;
+    button.textContent = def.symbol;
+    button.title = `${def.name} (arity ${def.arity})`;
+    button.style.color = def.color.a;
+    button.addEventListener("click", () => {
+      setTool(tool === def.symbol ? "wire" : def.symbol);
+    });
+    paletteEl.append(button);
+  }
+  symbolButtons = [...paletteEl.querySelectorAll<HTMLButtonElement>("button.sym")];
+
+  const isBase = alphabet.id === ALPHABETS[0].id;
+  presetSelect.disabled = !isBase;
+  presetSelect.title = isBase
+    ? "Load a canned net"
+    : "The presets are hand-built γδε nets — use Random for other alphabets";
+
+  const rows: string[] = [];
+  for (let i = 0; i < alphabet.symbols.length; i++) {
+    for (let j = i; j < alphabet.symbols.length; j++) {
+      const x = alphabet.symbols[i];
+      const y = alphabet.symbols[j];
+      const found = lookupRule(alphabet, x.symbol, y.symbol);
+      const [first, second] = x.symbol <= y.symbol ? [x.symbol, y.symbol] : [y.symbol, x.symbol];
+      void splitPairKey;
+      const result = !found
+        ? '<span class="dead">deadlock</span>'
+        : found.rule.creates.length === 0
+          ? "&rarr; nothing"
+          : `&rarr; ${found.rule.creates.join(" + ")}`;
+      const verb = found ? `<span class="verb">${found.rule.verb}</span>` : "";
+      rows.push(`<tr><td>${first} &#8904; ${second}</td><td>${verb}</td><td>${result}</td></tr>`);
+    }
+  }
+  ruleBody.innerHTML =
+    `<h3>${alphabet.name}</h3><table>${rows.join("")}</table>` +
+    `<div class="note">${alphabet.blurb}</div>` +
+    `<div class="note">A pair with no rule is stuck forever — that is a design tool, not a bug.</div>`;
+}
+
+function setAlphabet(id: string): void {
+  alphabet = alphabetById(id) ?? ALPHABETS[0];
+  alphabetSelect.value = alphabet.id;
+  syncAlphabet();
+  if (alphabet.id === ALPHABETS[0].id) loadPreset(presetSelect.value);
+  else loadRandom();
+}
+
+/** A random net in the current alphabet — the stand-in for presets. */
+function loadRandom(): void {
+  for (let attempt = 0; attempt < 400; attempt++) {
+    const candidate = makeEnemy(alphabet, Math.floor(Math.random() * 1e9), 4);
+    if (candidate) {
+      load(() => candidate, `Random ${alphabet.name} net. ${alphabet.blurb}`);
+      return;
+    }
+  }
+  load(() => new Net(alphabet), `Empty ${alphabet.name} canvas.`);
 }
 
 // --- Reduction ------------------------------------------------------------------
@@ -297,15 +381,9 @@ function syncButtons(): void {
       ? "click a port, then another port, to wire them · drag to move · corners are ports: apex up = principal"
       : tool === "erase"
         ? "click an agent to delete it"
-        : `click to place ${tool} — ${symbolDef(BASE, tool)?.name ?? ""}`;
+        : `click to place ${tool} — ${symbolDef(alphabet, tool)?.name ?? ""}`;
 }
 
-for (const button of symbolButtons) {
-  button.addEventListener("click", () => {
-    const sym = button.dataset.sym as Sym;
-    setTool(tool === sym ? "wire" : sym);
-  });
-}
 eraseButton.addEventListener("click", () => setTool(tool === "erase" ? "wire" : "erase"));
 orderButton.addEventListener("click", () => {
   parallel = !parallel;
@@ -338,8 +416,14 @@ document.getElementById("tidy")!.addEventListener("click", () => {
   renderer.placeLooseFreePorts(net);
 });
 document.getElementById("clear")!.addEventListener("click", () => {
-  load(() => new Net(), "Empty canvas. Place agents from the palette and wire them up.");
+  load(() => new Net(alphabet), "Empty canvas. Place agents from the palette and wire them up.");
 });
+document.getElementById("random")!.addEventListener("click", loadRandom);
+document.getElementById("rules")!.addEventListener("click", () => {
+  rulePanel.classList.toggle("show");
+  desc.style.display = rulePanel.classList.contains("show") ? "none" : "";
+});
+alphabetSelect.addEventListener("change", () => setAlphabet(alphabetSelect.value));
 presetSelect.addEventListener("change", () => loadPreset(presetSelect.value));
 
 window.addEventListener("resize", () => {
@@ -357,9 +441,10 @@ window.addEventListener("keydown", (event) => {
     advance();
   } else if (event.key === "t") {
     renderer.relayout(net);
-  } else if (["γ", "δ", "ε", "g", "d", "e"].includes(event.key)) {
-    const map: Record<string, Sym> = { g: "γ", d: "δ", e: "ε", γ: "γ", δ: "δ", ε: "ε" };
-    setTool(map[event.key]);
+  } else if (/^[1-9]$/.test(event.key)) {
+    // Number keys pick from the palette, whatever the alphabet's symbols are.
+    const def = alphabet.symbols[Number(event.key) - 1];
+    if (def) setTool(tool === def.symbol ? "wire" : def.symbol);
   } else if (event.key === "Escape") {
     setTool("wire");
   }
@@ -395,8 +480,9 @@ function frame(now: number): void {
 // --- Boot ------------------------------------------------------------------------------
 
 renderer.resize();
-loadPreset(new URLSearchParams(location.search).get("preset") ?? PRESETS[0].id);
-presetSelect.value = new URLSearchParams(location.search).get("preset") ?? PRESETS[0].id;
+const params = new URLSearchParams(location.search);
+presetSelect.value = params.get("preset") ?? PRESETS[0].id;
+setAlphabet(params.get("alphabet") ?? ALPHABETS[0].id);
 syncButtons();
 requestAnimationFrame(frame);
 
@@ -410,6 +496,7 @@ requestAnimationFrame(frame);
   stats,
   loadPreset,
   advance,
+  setAlphabet,
   setParallel: (on: boolean) => {
     parallel = on;
     syncButtons();

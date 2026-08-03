@@ -191,6 +191,48 @@
           font-size: 11.5px;
         }
       }
+      /* Rule reference. Five alphabets is more than anyone can hold in their
+         head, so the playground shows the table for whichever one is loaded. */
+      #rulePanel {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        max-height: calc(100% - 20px);
+        overflow: auto;
+        padding: 10px 12px;
+        background: var(--panel);
+        border: 1px solid var(--stroke);
+        border-radius: 10px;
+        font-size: 12.5px;
+        display: none;
+        min-width: 240px;
+      }
+      #rulePanel.show {
+        display: block;
+      }
+      #rulePanel h3 {
+        font-size: 13px;
+        margin-bottom: 6px;
+      }
+      #rulePanel table {
+        border-collapse: collapse;
+      }
+      #rulePanel td {
+        padding: 2px 8px 2px 0;
+        white-space: nowrap;
+      }
+      #rulePanel .verb {
+        color: var(--accent);
+      }
+      #rulePanel .dead {
+        color: #ff6b8a;
+      }
+      #rulePanel .note {
+        color: var(--dim);
+        margin-top: 7px;
+        white-space: normal;
+        max-width: 260px;
+      }
       #desc {
         position: absolute;
         top: 10px;
@@ -211,7 +253,12 @@
     <div id="app">
       <header>
         <div class="group">
+          <select id="alphabet" title="Which symbols and rules this net is written in"></select>
+          <button id="rules" title="Show the rule table">rules</button>
+        </div>
+        <div class="group">
           <select id="preset" title="Load a canned net"></select>
+          <button id="random" title="Generate a random net in this alphabet">Random</button>
           <button id="reset" title="Rebuild the current preset">Reset</button>
           <button id="tidy" title="Re-run the tree layout">Tidy</button>
           <button id="clear" title="Empty the canvas">Clear</button>
@@ -245,14 +292,13 @@
         </div>
         <div class="group">
           <label>place</label>
-          <button class="sym" data-sym="γ" title="constructor (arity 2)">γ</button>
-          <button class="sym" data-sym="δ" title="duplicator (arity 2)">δ</button>
-          <button class="sym" data-sym="ε" title="eraser (arity 0)">ε</button>
-          <button id="erase" title="Delete agents">✕</button>
+          <span id="palette"></span>
+          <button id="erase" title="Delete agents">del</button>
         </div>
       </header>
       <main>
         <canvas id="net"></canvas>
+        <div id="rulePanel"><div id="ruleBody"></div></div>
         <div id="hud"></div>
         <div id="desc"></div>
         <div id="hint"></div>

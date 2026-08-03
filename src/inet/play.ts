@@ -8,8 +8,11 @@
  * `layout`, `render`, `relax`) and adds only the game layer in `level.ts`,
  * `levels.ts` and `solver.ts`. Nothing here touches `src/core/`.
  */
-import { cardLabel, cardName, LevelRun, legalMoves, type Card, type Move } from "./level";
-import { LEVELS, levelById } from "./levels";
+import { lookupRule, type Alphabet } from "./alphabet";
+import { ALPHABETS, alphabetById } from "./alphabets";
+import { generateLevels } from "./generate-levels";
+import { cardLabel, cardName, LevelRun, legalMoves, type Card, type LevelDef, type Move } from "./level";
+import { LEVELS } from "./levels";
 import { isFree, type AgentId } from "./net";
 import { activePairs, type ActivePair } from "./reduce";
 import { NetRenderer } from "./render";
@@ -19,6 +22,9 @@ const hud = document.getElementById("hud") as HTMLDivElement;
 const teaches = document.getElementById("teaches") as HTMLDivElement;
 const handEl = document.getElementById("hand") as HTMLDivElement;
 const levelSelect = document.getElementById("level") as HTMLSelectElement;
+const alphabetSelect = document.getElementById("alphabet") as HTMLSelectElement;
+const rulePanel = document.getElementById("rulePanel") as HTMLDivElement;
+const ruleBody = document.getElementById("ruleBody") as HTMLDivElement;
 const stepButton = document.getElementById("step") as HTMLButtonElement;
 const runButton = document.getElementById("run") as HTMLButtonElement;
 const undoButton = document.getElementById("undo") as HTMLButtonElement;
@@ -30,6 +36,14 @@ const resultAgain = document.getElementById("resultAgain") as HTMLButtonElement;
 
 const renderer = new NetRenderer(canvas);
 
+/**
+ * The base alphabet keeps its hand-authored teaching set; every other alphabet
+ * gets levels generated and verified at load (see generate-levels.ts). Authoring
+ * five sets by hand while the rule sets are still moving would be wasted work,
+ * and a generated set is a fairer sample of what a typical puzzle feels like.
+ */
+let alphabet: Alphabet = ALPHABETS[0];
+let levels: readonly LevelDef[] = LEVELS;
 let run = new LevelRun(LEVELS[0]);
 /** Index into `run.hand` of the card being held, if any. */
 let held: number | null = null;
@@ -42,7 +56,8 @@ let resolved = false;
 // --- Level lifecycle ----------------------------------------------------------------
 
 function load(id: string): void {
-  const def = levelById(id) ?? LEVELS[0];
+  const def = levels.find((l) => l.id === id) ?? levels[0];
+  if (!def) return;
   run = new LevelRun(def);
   held = null;
   spliceFrom = null;
@@ -57,11 +72,75 @@ function load(id: string): void {
   syncHand();
 }
 
-for (const level of LEVELS) {
+for (const a of ALPHABETS) {
   const option = document.createElement("option");
-  option.value = level.id;
-  option.textContent = `${level.name} · par ${level.par}`;
-  levelSelect.append(option);
+  option.value = a.id;
+  option.textContent = a.name;
+  alphabetSelect.append(option);
+}
+
+function syncLevelList(): void {
+  levelSelect.innerHTML = "";
+  for (const level of levels) {
+    const option = document.createElement("option");
+    option.value = level.id;
+    option.textContent = `${level.name} · par ${level.par}`;
+    levelSelect.append(option);
+  }
+}
+
+function syncRulePanel(): void {
+  const rows: string[] = [];
+  for (let i = 0; i < alphabet.symbols.length; i++) {
+    for (let j = i; j < alphabet.symbols.length; j++) {
+      const x = alphabet.symbols[i];
+      const y = alphabet.symbols[j];
+      const found = lookupRule(alphabet, x.symbol, y.symbol);
+      const [first, second] = x.symbol <= y.symbol ? [x.symbol, y.symbol] : [y.symbol, x.symbol];
+      const result = !found
+        ? '<span class="dead">deadlock</span>'
+        : found.rule.creates.length === 0
+          ? "&rarr; nothing"
+          : `&rarr; ${found.rule.creates.join(" + ")}`;
+      const verb = found ? `<span class="verb">${found.rule.verb}</span>` : "";
+      rows.push(`<tr><td>${first} &#8904; ${second}</td><td>${verb}</td><td>${result}</td></tr>`);
+    }
+  }
+  ruleBody.innerHTML =
+    `<h3>${alphabet.name}</h3><table>${rows.join("")}</table>` +
+    `<div class="note">${alphabet.blurb}</div>` +
+    `<div class="note">Press <b>rules</b> again to hide this and see the net behind it.</div>`;
+}
+
+/**
+ * Generating a level set solves every candidate net, which takes a few seconds
+ * and blocks the main thread. Paint a notice first — a frozen tab with no
+ * explanation reads as a crash — then generate on the next frame.
+ */
+function setAlphabet(id: string): void {
+  alphabet = alphabetById(id) ?? ALPHABETS[0];
+  alphabetSelect.value = alphabet.id;
+  syncRulePanel();
+
+  if (alphabet.id === ALPHABETS[0].id) {
+    levels = LEVELS;
+    syncLevelList();
+    load(levels[0].id);
+    return;
+  }
+
+  levelSelect.innerHTML = "<option>generating…</option>";
+  levelSelect.disabled = true;
+  teaches.innerHTML = `<b>${alphabet.name}</b>Solving candidate nets to find levels that can actually be cleared…`;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      levels = generateLevels(alphabet, 6, 3);
+      levelSelect.disabled = false;
+      syncLevelList();
+      if (levels.length > 0) load(levels[0].id);
+      else teaches.innerHTML = `<b>${alphabet.name}</b>No solvable levels found for this alphabet.`;
+    });
+  });
 }
 
 // --- Playing cards --------------------------------------------------------------------
@@ -188,8 +267,8 @@ function show(title: string, body: string, won: boolean): void {
 }
 
 function nextLevelId(): string | null {
-  const i = LEVELS.findIndex((l) => l.id === run.level.id);
-  return i >= 0 && i + 1 < LEVELS.length ? LEVELS[i + 1].id : null;
+  const i = levels.findIndex((l) => l.id === run.level.id);
+  return i >= 0 && i + 1 < levels.length ? levels[i + 1].id : null;
 }
 
 // --- Hand UI -----------------------------------------------------------------------------
@@ -283,6 +362,11 @@ undoButton.addEventListener("click", () => {
 });
 document.getElementById("reset")!.addEventListener("click", () => load(run.level.id));
 levelSelect.addEventListener("change", () => load(levelSelect.value));
+alphabetSelect.addEventListener("change", () => setAlphabet(alphabetSelect.value));
+document.getElementById("rules")!.addEventListener("click", () => {
+  rulePanel.classList.toggle("show");
+  teaches.style.display = rulePanel.classList.contains("show") ? "none" : "";
+});
 resultAgain.addEventListener("click", () => load(run.level.id));
 resultNext.addEventListener("click", () => {
   const next = nextLevelId();
@@ -351,7 +435,9 @@ function frame(now: number): void {
 // --- Boot ----------------------------------------------------------------------------------------
 
 renderer.resize();
-load(new URLSearchParams(location.search).get("level") ?? LEVELS[0].id);
+const params = new URLSearchParams(location.search);
+setAlphabet(params.get("alphabet") ?? ALPHABETS[0].id);
+if (params.get("level")) load(params.get("level")!);
 requestAnimationFrame(frame);
 
 // Dev hook, mirroring the sandbox's `window.__inet`, so the screenshot script
@@ -362,6 +448,10 @@ requestAnimationFrame(frame);
   },
   renderer,
   load,
+  setAlphabet,
+  get levels() {
+    return levels;
+  },
   play: (move: Move) => playMove(move),
   stepOnce,
   runOut: (limit = 200) => {

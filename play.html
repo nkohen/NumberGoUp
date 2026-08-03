@@ -50,6 +50,20 @@
         pointer-events: none; min-width: 172px; }
       #hud b { float: right; margin-left: 14px; font-weight: 700; }
       #hud .k { color: var(--dim); }
+      /* Rule reference: with several alphabets in play nobody can hold the
+         tables in their head, and a puzzle you cannot read the rules of is not
+         a puzzle. */
+      #rulePanel { position: absolute; top: 10px; right: 10px; max-height: calc(100% - 20px);
+        overflow: auto; padding: 10px 12px; background: var(--panel);
+        border: 1px solid var(--stroke); border-radius: 10px; font-size: 12.5px;
+        display: none; min-width: 230px; }
+      #rulePanel.show { display: block; }
+      #rulePanel h3 { font-size: 13px; margin-bottom: 6px; }
+      #rulePanel table { border-collapse: collapse; }
+      #rulePanel td { padding: 2px 8px 2px 0; white-space: nowrap; }
+      #rulePanel .verb { color: var(--accent); }
+      #rulePanel .dead { color: #ff6b8a; }
+      #rulePanel .note { color: var(--dim); margin-top: 7px; white-space: normal; max-width: 250px; }
       #teaches { position: absolute; top: 10px; right: 10px; max-width: 300px;
         padding: 9px 12px; background: var(--panel); border: 1px solid var(--stroke);
         border-radius: 10px; font-size: 12.5px; line-height: 1.45; color: var(--dim);
@@ -88,6 +102,10 @@
     <div id="app">
       <header>
         <div class="group">
+          <select id="alphabet" title="Which symbols and rules to play with"></select>
+          <button id="rules" title="Show the rule table">rules</button>
+        </div>
+        <div class="group">
           <select id="level" title="Pick a level"></select>
           <button id="reset">Reset</button>
           <button id="undo">Undo</button>
@@ -104,6 +122,7 @@
         <canvas id="net"></canvas>
         <div id="hud"></div>
         <div id="teaches"></div>
+        <div id="rulePanel"><div id="ruleBody"></div></div>
         <div id="result"><div id="resultPanel">
           <h2 id="resultTitle"></h2>
           <p id="resultBody"></p>

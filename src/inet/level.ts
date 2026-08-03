@@ -39,7 +39,9 @@ export function agentCard(symbol: Sym): Card {
 export const WIRE_CARD: Card = { kind: "wire" };
 
 export function cardLabel(card: Card): string {
-  return card.kind === "wire" ? "⌇" : card.symbol;
+  // An em dash, not a fancier squiggle: the wire card has to render in whatever
+  // font the page falls back to, and the prettier glyphs are not in all of them.
+  return card.kind === "wire" ? "—" : card.symbol;
 }
 
 /** Tooltip for a card, taken from the alphabet so new symbol sets describe

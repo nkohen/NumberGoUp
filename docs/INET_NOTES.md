@@ -394,6 +394,25 @@ diverges on roughly a third of random nets, which is normal for this system, not
 a defect — so the base alphabet was missing from its own comparison until the
 threshold was loosened.
 
+### Trying them interactively
+
+Both dev pages are alphabet-aware, with a **rules** button that shows the table
+for whichever one is loaded — five rule sets is more than anyone can hold in
+their head, and a puzzle whose rules you cannot read is not a puzzle.
+
+- **`/sandbox.html`** — pick an alphabet, get its palette, place and wire agents
+  freely and watch them react. `Random` generates a fresh net in the current
+  alphabet (the canned presets are hand-built γδε nets, so they are only offered
+  for the base alphabet). This is the fastest way to get a feel for a rule set:
+  drop two symbols, wire them nose to nose, step.
+- **`/play.html`** — pick an alphabet and play "clear the net" in it. The base
+  alphabet keeps its hand-authored teaching set; every other alphabet gets levels
+  **generated and verified at load** (`generate-levels.ts`), which takes a few
+  seconds because it solves every candidate. Authoring five sets by hand while
+  the rule sets are still moving would be wasted work, and a generated set is a
+  fairer sample of what a typical puzzle in that alphabet feels like than my
+  favourite puzzle in it would be.
+
 ---
 
 ## Notes on the code
